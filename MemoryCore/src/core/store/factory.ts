@@ -5,6 +5,7 @@
  * Supports:
  * - "sqlite" (default): local SQLite + sqlite-vec + FTS5
  * - "tcvdb": Tencent Cloud VectorDB (server-side embedding + hybridSearch)
+ * - "postgres": Postgres + pgvector (client-side jieba → sparsevec)
  *
  * Both backends ship with core and are resolved through StoreBackendRegistry
  * (same registry as Gateway StorePool). TCVDB is a vendor-provided store that
@@ -72,6 +73,23 @@ export function createStoreBundle(
     const created = registry.create("tcvdb", {
       memoryCfg: config,
       dataDir: options.dataDir,
+      logger,
+      bm25Encoder,
+    });
+
+    return {
+      store: created.store,
+      embedding: (created.embedding ?? new NoopEmbeddingService()) as IEmbeddingService,
+      bm25Encoder: created.bm25Encoder ?? bm25Encoder,
+      storeSnapshot: created.storeSnapshot,
+    };
+  }
+
+  if (config.storeBackend === "postgres") {
+    const created = registry.create("postgres", {
+      memoryCfg: config,
+      dataDir: options.dataDir,
+      instanceId: "default",
       logger,
       bm25Encoder,
     });

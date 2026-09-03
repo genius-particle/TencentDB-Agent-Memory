@@ -55,6 +55,7 @@ export type {
   CreatedStoreBackend,
 } from "./store/registry.js";
 export { getSqlitePath } from "./store/sqlite-backend.js";
+export { postgresSchemaForInstance, hasPostgresEnv, resolvePostgresConnection } from "./store/postgres-env.js";
 export { createStoreBundle } from "./store/factory.js";
 export type { StoreBundle, CreateStoreBundleOptions } from "./store/factory.js";
 

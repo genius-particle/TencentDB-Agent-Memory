@@ -42,10 +42,11 @@ describe("StoreBackendRegistry", () => {
     vi.restoreAllMocks();
   });
 
-  it("registers sqlite and tcvdb as first-class backends (no silent default flip)", () => {
+  it("registers sqlite, tcvdb, and postgres as first-class backends (no silent default flip)", () => {
     expect(defaultStoreBackendRegistry.has("sqlite")).toBe(true);
     expect(defaultStoreBackendRegistry.has("tcvdb")).toBe(true);
-    expect(defaultStoreBackendRegistry.list().sort()).toEqual(["sqlite", "tcvdb"]);
+    expect(defaultStoreBackendRegistry.has("postgres")).toBe(true);
+    expect(defaultStoreBackendRegistry.list().sort()).toEqual(["postgres", "sqlite", "tcvdb"]);
   });
 
   it("createStoreBundle and StorePool resolve sqlite through the same registry", async () => {
@@ -104,6 +105,13 @@ describe("StoreBackendRegistry", () => {
       apiKey: "k",
       database: "db",
     })).toBe("tcvdb");
+    expect(resolvePooledStoreBackend("postgres", null)).toBe("postgres");
+    expect(resolvePooledStoreBackend("postgres", {
+      url: "http://vdb",
+      user: "root",
+      apiKey: "k",
+      database: "db",
+    })).toBe("postgres");
 
     const spy = vi.spyOn(defaultStoreBackendRegistry, "create");
     const pool = new StorePool({
@@ -130,6 +138,27 @@ describe("StoreBackendRegistry", () => {
         logger: silentLogger,
       }),
     ).toThrow(/TCVDB backend requires tcvdb.url and tcvdb.apiKey/);
+  });
+
+  it("plugin createStoreBundle fail-hard when postgres is selected without DATABASE_URL", () => {
+    const prev = process.env.DATABASE_URL;
+    const prevHost = process.env.PGHOST;
+    const prevDb = process.env.PGDATABASE;
+    delete process.env.DATABASE_URL;
+    delete process.env.PGHOST;
+    delete process.env.PGDATABASE;
+    try {
+      expect(() =>
+        createStoreBundle(testConfig({ storeBackend: "postgres" }), {
+          dataDir: dir,
+          logger: silentLogger,
+        }),
+      ).toThrow(/Postgres backend requires/);
+    } finally {
+      if (prev !== undefined) process.env.DATABASE_URL = prev;
+      if (prevHost !== undefined) process.env.PGHOST = prevHost;
+      if (prevDb !== undefined) process.env.PGDATABASE = prevDb;
+    }
   });
 
   it("getSqlitePath keeps default vs per-instance layout", () => {

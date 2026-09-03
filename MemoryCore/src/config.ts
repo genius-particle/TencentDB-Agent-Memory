@@ -180,7 +180,15 @@ export interface TcvdbConfig {
 }
 
 /** Storage backend type. */
-export type StoreBackend = "sqlite" | "tcvdb";
+export type StoreBackend = "sqlite" | "tcvdb" | "postgres";
+
+/** Postgres + pgvector (open-service path). Unused unless storeBackend=postgres. */
+export interface PostgresStoreConfig {
+  /** Connection string. Falls back to DATABASE_URL / PG* env. */
+  url?: string;
+  /** Schema override. Default: mem_{instanceId}. */
+  schema?: string;
+}
 
 /** Report settings — controls metric/event reporting. */
 export interface ReportConfig {
@@ -336,10 +344,12 @@ export interface MemoryTdaiConfig {
   pipeline: PipelineTriggerConfig;
   recall: RecallConfig;
   embedding: EmbeddingConfig;
-  /** Storage backend: "sqlite" (default) or "tcvdb" */
+  /** Storage backend: "sqlite" (default), "tcvdb", or "postgres" */
   storeBackend: StoreBackend;
   /** Tencent Cloud VectorDB configuration (required when storeBackend = "tcvdb") */
   tcvdb: TcvdbConfig;
+  /** Postgres + pgvector (required when storeBackend = "postgres" unless DATABASE_URL/PG* is set) */
+  postgres: PostgresStoreConfig;
   /** BM25 sparse vector encoding (local @tencentdb-agent-memory/tcvdb-text) */
   bm25: BM25Config;
   /** Local JSONL cleanup settings */
@@ -496,10 +506,13 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
 
   // --- Store backend ---
   const storeBackendRaw = str(c, "storeBackend") ?? "sqlite";
-  const storeBackend: StoreBackend = storeBackendRaw === "tcvdb" ? "tcvdb" : "sqlite";
+  const storeBackend: StoreBackend =
+    storeBackendRaw === "tcvdb" ? "tcvdb" :
+    storeBackendRaw === "postgres" ? "postgres" : "sqlite";
 
   // --- TCVDB config ---
   const tcvdbGroup = obj(c, "tcvdb");
+  const postgresGroup = obj(c, "postgres");
 
   const memoryCleanup: MemoryCleanupConfig = {
     retentionDays,
@@ -625,6 +638,10 @@ export function parseConfig(raw: Record<string, unknown> | undefined): MemoryTda
       embeddingModel: str(tcvdbGroup, "embeddingModel") ?? "bge-large-zh",
       timeout: num(tcvdbGroup, "timeout") ?? 10000,
       caPemPath: str(tcvdbGroup, "caPemPath") || undefined,
+    },
+    postgres: {
+      url: optStr(postgresGroup, "url"),
+      schema: optStr(postgresGroup, "schema"),
     },
     bm25: {
       enabled: bool(bm25Group, "enabled") ?? true,
