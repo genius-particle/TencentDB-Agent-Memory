@@ -16,16 +16,18 @@ const hasPostgres = hasPostgresEnv();
 
 describe.skipIf(!hasPostgres)("IMemoryStore contract: postgres", () => {
   let store: IMemoryStore;
-  const schema = `mem_contract_${process.pid}_${Date.now().toString(36)}`;
 
   beforeEach(async () => {
     ensureBuiltinStoreBackends();
     const cfg = parseConfig({
       storeBackend: "postgres",
-      bm25: { enabled: true, language: "zh" },
+      bm25: { enabled: true, language: "en" },
       embedding: { provider: "none" },
     });
     const bm25Encoder = createBM25Encoder(cfg.bm25);
+    // Unique schema per test so sparse FTS (LIMIT 10) is not crowded by
+    // leftover rows from earlier cases in this file.
+    const schema = `mem_c_${process.pid}_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
     const created = defaultStoreBackendRegistry.create("postgres", {
       memoryCfg: cfg,
       dataDir: ".",

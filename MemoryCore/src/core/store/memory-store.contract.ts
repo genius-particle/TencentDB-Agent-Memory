@@ -167,10 +167,10 @@ export function runMemoryStoreContract(
   it(`[${name}] FTS search hits inserted text when ftsSearch is advertised`, async (ctx) => {
     const store = getStore();
     if (!skipUnlessCap(ctx, store, "ftsSearch")) return;
-    const rec = sampleL0({ messageText: "unique-fts-token-alpha" });
+    const rec = sampleL0({ messageText: "zxqv-unique-fts-token-alpha" });
     expect(await store.upsertL0(rec)).toBe(true);
     expect(store.isFtsAvailable()).toBe(true);
-    const q = buildFtsQuery("unique-fts-token-alpha");
+    const q = buildFtsQuery("zxqv-unique-fts-token-alpha");
     expect(q).toBeTruthy();
     const hits = await store.searchL0Fts(q!, 10);
     expect(hits.some((h) => h.record_id === rec.id)).toBe(true);

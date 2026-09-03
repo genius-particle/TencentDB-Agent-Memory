@@ -89,3 +89,19 @@ export function ftsQueryToText(ftsQuery: string): string {
     .replace(/\s+/g, " ")
     .trim();
 }
+
+/** Split lexical query text on non-alphanumeric boundaries (hyphens, spaces). */
+export function ftsLexicalTokens(text: string): string[] {
+  const raw = text.match(/[\p{L}\p{N}_]+/gu) ?? [];
+  return [...new Set(raw.map((t) => t.trim()).filter(Boolean))];
+}
+
+/** ILIKE patterns so FTS5-tokenized queries still hit hyphenated source text. */
+export function ftsIlikePatterns(text: string): string[] {
+  const tokens = ftsLexicalTokens(text);
+  const src = tokens.length > 0 ? tokens : [text.replace(/[%_\\]/g, "").trim()];
+  return src
+    .map((t) => t.replace(/[%_\\]/g, ""))
+    .filter(Boolean)
+    .map((t) => `%${t}%`);
+}

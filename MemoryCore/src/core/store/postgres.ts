@@ -2,7 +2,9 @@
  * PostgresMemoryStore — IMemoryStore on Postgres + pgvector.
  *
  * Open-service path: dense `vector` + client-side jieba/BM25 `sparsevec`.
- * No pg_jieba. No new TCVDB behavior.
+ * Lexical `ftsSearch` is PostgreSQL `simple` tsvector + token ILIKE
+ * (not BM25 sparsevec recall, and not pg_jieba).
+ * No new TCVDB behavior.
  *
  * Capability flags are honest: profiles/pagination/audit/clear/deferredEmbedding
  * are implemented; entities/knowledge/prompts/generationRefs are not (Phase 3).
@@ -47,6 +49,7 @@ import type {
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
 import {
   DEFAULT_SPARSE_DIMENSIONS,
+  ftsIlikePatterns,
   ftsQueryToText,
   toSparsevecLiteral,
   toVectorLiteral,
@@ -247,6 +250,7 @@ export class PostgresMemoryStore implements IMemoryStore {
     const vectorSearch = this.dimensions > 0 && !this.degraded;
     return {
       vectorSearch,
+      // Lexical FTS is tsvector('simple') + token ILIKE, not BM25 sparsevec recall.
       ftsSearch: !this.degraded,
       nativeHybridSearch: vectorSearch && hasBm25,
       sparseVectors: hasBm25,
@@ -518,38 +522,25 @@ export class PostgresMemoryStore implements IMemoryStore {
   async searchL1Fts(ftsQuery: string, limit = 10, filter?: IsolationFilter): Promise<L1FtsResult[]> {
     if (this.degraded || !ftsQuery) return [];
     const text = ftsQueryToText(ftsQuery);
-    if (!text) return [];
-    const sparse = this.encodeSparse(text, true);
+    const patterns = ftsIlikePatterns(text);
+    if (!text || patterns.length === 0) return [];
+    const retrieve = filter ? Math.max(limit * 5, limit) : limit;
     try {
-      const retrieve = filter ? Math.max(limit * 5, limit) : limit;
       return await this.withClient(async (client) => {
-        if (sparse) {
-          const res = await client.query(
-            `SELECT record_id, content, type, priority, scene_name, session_key, session_id,
-                    team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start,
-                    timestamp_end, metadata_json,
-                    - (sparse_embedding <#> $1::sparsevec) AS score
-             FROM l1_records
-             WHERE sparse_embedding IS NOT NULL
-             ORDER BY sparse_embedding <#> $1::sparsevec
-             LIMIT $2`,
-            [sparse, retrieve],
-          );
-          const hits = res.rows
-            .filter((r) => rowMatchesIsolation(r, filter))
-            .slice(0, limit)
-            .map((r) => this.mapL1Search(r));
-          if (hits.length > 0) return hits;
-        }
         const res = await client.query(
           `SELECT record_id, content, type, priority, scene_name, session_key, session_id,
                   team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start,
-                  timestamp_end, metadata_json, 1.0::float AS score
+                  timestamp_end, metadata_json,
+                  ts_rank_cd(
+                    to_tsvector('simple', coalesce(content, '')),
+                    plainto_tsquery('simple', $1)
+                  ) AS score
            FROM l1_records
-           WHERE content ILIKE $1
-           ORDER BY updated_time DESC
-           LIMIT $2`,
-          [`%${text.replace(/[%_]/g, "")}%`, retrieve],
+           WHERE to_tsvector('simple', coalesce(content, '')) @@ plainto_tsquery('simple', $1)
+              OR content ILIKE ANY($2::text[])
+           ORDER BY score DESC, updated_time DESC
+           LIMIT $3`,
+          [text, patterns, retrieve],
         );
         return res.rows
           .filter((r) => rowMatchesIsolation(r, filter))
@@ -823,37 +814,24 @@ export class PostgresMemoryStore implements IMemoryStore {
   async searchL0Fts(ftsQuery: string, limit = 10, filter?: IsolationFilter): Promise<L0FtsResult[]> {
     if (this.degraded || !ftsQuery) return [];
     const text = ftsQueryToText(ftsQuery);
-    if (!text) return [];
-    const sparse = this.encodeSparse(text, true);
+    const patterns = ftsIlikePatterns(text);
+    if (!text || patterns.length === 0) return [];
+    const retrieve = filter ? Math.max(limit * 5, limit) : limit;
     try {
-      const retrieve = filter ? Math.max(limit * 5, limit) : limit;
       return await this.withClient(async (client) => {
-        if (sparse) {
-          const res = await client.query(
-            `SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id,
-                    role, message_text, recorded_at, timestamp,
-                    - (sparse_embedding <#> $1::sparsevec) AS score
-             FROM l0_conversations
-             WHERE sparse_embedding IS NOT NULL
-             ORDER BY sparse_embedding <#> $1::sparsevec
-             LIMIT $2`,
-            [sparse, retrieve],
-          );
-          const hits = res.rows
-            .filter((r) => rowMatchesIsolation(r, filter))
-            .slice(0, limit)
-            .map((r) => this.mapL0Search(r));
-          if (hits.length > 0) return hits;
-        }
-        // Keyword fallback (still client-tokenized text; no pg_jieba).
         const res = await client.query(
           `SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id,
-                  role, message_text, recorded_at, timestamp, 1.0::float AS score
+                  role, message_text, recorded_at, timestamp,
+                  ts_rank_cd(
+                    to_tsvector('simple', coalesce(message_text, '')),
+                    plainto_tsquery('simple', $1)
+                  ) AS score
            FROM l0_conversations
-           WHERE message_text ILIKE $1
-           ORDER BY recorded_at DESC
-           LIMIT $2`,
-          [`%${text.replace(/[%_]/g, "")}%`, retrieve],
+           WHERE to_tsvector('simple', coalesce(message_text, '')) @@ plainto_tsquery('simple', $1)
+              OR message_text ILIKE ANY($2::text[])
+           ORDER BY score DESC, recorded_at DESC
+           LIMIT $3`,
+          [text, patterns, retrieve],
         );
         return res.rows
           .filter((r) => rowMatchesIsolation(r, filter))
