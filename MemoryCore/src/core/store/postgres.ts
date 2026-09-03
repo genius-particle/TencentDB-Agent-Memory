@@ -90,7 +90,6 @@ export class PostgresMemoryStore implements IMemoryStore {
   private readonly logger?: StoreLogger;
   private readonly bm25Encoder?: BM25LocalEncoder;
   private degraded = false;
-  private ready = false;
   private pgModule: typeof import("pg") | null = null;
 
   constructor(opts: PostgresMemoryStoreOptions) {
@@ -227,7 +226,6 @@ export class PostgresMemoryStore implements IMemoryStore {
         await client.query("CREATE INDEX IF NOT EXISTS idx_pg_profiles_team_agent ON profiles(team_id, agent_id)");
         await client.query("CREATE INDEX IF NOT EXISTS idx_pg_audit_record ON memory_audit(record_id, updated_at_ms)");
       });
-      this.ready = true;
       this.degraded = false;
       this.logger?.debug?.(`${TAG} Initialized schema=${this.schema} dimensions=${this.dimensions}`);
       return { needsReindex: false };
@@ -267,7 +265,6 @@ export class PostgresMemoryStore implements IMemoryStore {
   close(): void {
     const pool = this.pool;
     this.pool = null;
-    this.ready = false;
     void pool?.end().catch(() => undefined);
   }
 

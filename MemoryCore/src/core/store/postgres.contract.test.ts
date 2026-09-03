@@ -66,6 +66,6 @@ describe("postgres helpers (no database required)", () => {
   it("postgresSchemaForInstance sanitizes identifiers", () => {
     expect(postgresSchemaForInstance("default")).toBe("mem_default");
     expect(postgresSchemaForInstance("inst-9")).toBe("mem_inst_9");
-    expect(postgresSchemaForInstance("9abc")).toMatch(/^m_/);
+    expect(postgresSchemaForInstance("9abc")).toBe("mem_9abc");
   });
 });

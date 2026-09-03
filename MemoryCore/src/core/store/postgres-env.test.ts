@@ -19,7 +19,7 @@ describe("sparsevec literals (no database required)", () => {
   });
 
   it("formats dense vector literals", () => {
-    expect(toVectorLiteral(new Float32Array([0.1, 0.2]))).toBe("[0.1,0.2]");
+    expect(toVectorLiteral([0.1, 0.2])).toBe("[0.1,0.2]");
   });
 
   it("strips FTS5 syntax from buildFtsQuery output", () => {

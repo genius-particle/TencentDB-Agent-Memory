@@ -38,7 +38,6 @@ export async function createStorageBackend(
     }
 
     case "cos": {
-    case "cos": {
       if (!config.credentialProvider) {
         throw new Error(`${TAG} COS backend requires a credentialProvider`);
       }
