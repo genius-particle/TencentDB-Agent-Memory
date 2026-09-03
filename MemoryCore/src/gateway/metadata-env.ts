@@ -22,6 +22,8 @@ export function applyMetadataEnvFromGatewayConfig(metadata: GatewayMetadataConfi
     setEnvIfEmpty("TDAI_METADATA_SQLITE_BASE_DIR", store.sqliteBaseDir);
     setEnvIfEmpty("TDAI_METADATA_MONGO_URI", store.mongoUri);
     setEnvIfEmpty("TDAI_METADATA_MONGO_DB_PREFIX", store.mongoDbPrefix);
+    setEnvIfEmpty("TDAI_METADATA_BACKEND", store.backend);
+    setEnvIfEmpty("TDAI_METADATA_POSTGRES_URL", store.postgresUrl);
     if (store.mongoTransactions === false && !process.env.TDAI_METADATA_MONGO_TRANSACTIONS?.trim()) {
       process.env.TDAI_METADATA_MONGO_TRANSACTIONS = "false";
     }

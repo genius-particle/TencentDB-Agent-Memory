@@ -1,19 +1,23 @@
-# Open-service stack (Phase 2)
+# Open-service stack (Phase 2–3)
 #
-# Postgres+pgvector (memory store) + MinIO (blob) + Redis (state).
+# Postgres+pgvector (memory store) + Postgres (metadata) + MinIO (blob) + Redis (state).
 # Does NOT change live deployMode=service defaults (still tcvdb+cos+redis+mongo).
-# Using this file is opt-in: set STORE_MODE=postgres and STORAGE_BACKEND=s3
-# on the Gateway process. Leave those env vars unset and production stays
-# on TCVDB + COS.
+# Using this file is opt-in: set STORE_MODE=postgres, STORAGE_BACKEND=s3, and
+# TDAI_METADATA_BACKEND=postgres on the Gateway process. Leave those env vars
+# unset and production stays on TCVDB + COS + Mongo.
 #
-# Metadata stays SQLite/local (Phase 3). Do not set TDAI_DEPLOY_MODE=service
-# here — that path still expects Mongo + COS + TCVDB.
+# Metadata shares this Postgres instance (schema tdai_metadata_{instanceId}),
+# separate from memory schemas (mem_*). DATABASE_URL alone does not select
+# metadata postgres — TDAI_METADATA_BACKEND=postgres (or TDAI_METADATA_POSTGRES_URL)
+# is required. Do not set TDAI_DEPLOY_MODE=service here — that path still
+# expects Mongo + COS + TCVDB unless postgres metadata is explicit.
 #
 # Usage:
 #   docker compose -f deploy/compose/open-service.yml up -d
 #   export STORE_MODE=postgres
 #   export STORAGE_BACKEND=s3
 #   export DATABASE_URL=postgres://memory:memory@127.0.0.1:5432/memory
+#   export TDAI_METADATA_BACKEND=postgres
 #   export S3_ENDPOINT=http://127.0.0.1:9000
 #   export S3_ACCESS_KEY=minioadmin
 #   export S3_SECRET_KEY=minioadmin
