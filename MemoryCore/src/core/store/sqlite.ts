@@ -3465,6 +3465,15 @@ export class VectorStore implements IMemoryStore {
       ftsSearch: this.ftsAvailable,
       nativeHybridSearch: false,
       sparseVectors: false,
+      profiles: false,
+      entities: true,
+      audit: true,
+      prompts: true,
+      generationRefs: true,
+      knowledge: true,
+      pagination: true,
+      clearMemoryContent: true,
+      deferredEmbedding: this.supportsDeferredEmbedding,
     };
   }
 

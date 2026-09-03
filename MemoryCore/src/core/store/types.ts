@@ -11,8 +11,10 @@
  *    are expressed as capability flags so callers can gracefully degrade.
  * 3. **Fault-tolerant**: All methods return empty results or `false` on
  *    failure rather than throwing, unless explicitly documented otherwise.
- * 4. **Sync-first**: Matches current SQLite DatabaseSync usage. TCVDB backend
- *    adapts internally without changing these signatures.
+ * 4. **Sync-first (in-process)**: Matches current SQLite DatabaseSync usage.
+ *    TCVDB adapts internally without changing these signatures. The remote
+ *    process/language subset is frozen in `docs/store-remote-subset.md` —
+ *    Core is not locked into Sync-first forever.
  */
 
 import type { MemoryRecord } from "../record/l1-writer.js";
@@ -244,8 +246,10 @@ export interface StoreInitResult {
 // ============================
 
 /**
- * Describes what search capabilities a store backend supports.
- * Callers use this to select search strategies and degrade gracefully.
+ * Describes what a store backend supports.
+ * Callers use this to select strategies, skip contract tests, and degrade
+ * gracefully. Search flags may be runtime (e.g. sqlite-vec / FTS5 load);
+ * feature flags must match whether the corresponding methods exist.
  */
 export interface StoreCapabilities {
   /** Whether vector (embedding) search is available. */
@@ -256,7 +260,28 @@ export interface StoreCapabilities {
   nativeHybridSearch: boolean;
   /** Whether the store supports sparse vectors (BM25 encoding). */
   sparseVectors: boolean;
+  /** L2/L3 profile sync (`pullProfiles` / `syncProfiles` / …). */
+  profiles: boolean;
+  /** In-store team/user/agent/task entity CRUD. */
+  entities: boolean;
+  /** Memory modification audit (`appendAudit` / `queryAudit`). */
+  audit: boolean;
+  /** Memory prompt catalog + settings. */
+  prompts: boolean;
+  /** Memory generation provenance refs. */
+  generationRefs: boolean;
+  /** Knowledge entity CRUD (`createKnowledge` / `listKnowledge` / …). */
+  knowledge: boolean;
+  /** Paginated L0/L1 queries (`queryL0Paginated` / `queryL1Paginated`). */
+  pagination: boolean;
+  /** Scoped content wipe (`clearMemoryContent`). */
+  clearMemoryContent: boolean;
+  /** Background embedding via `upsertL0(record, undefined)` + `updateL0Embedding`. */
+  deferredEmbedding: boolean;
 }
+
+/** Alias for the expanded capability matrix (search + feature flags). */
+export type StoreFeatureMatrix = StoreCapabilities;
 
 // ============================
 // L2/L3 Profile Sync Types
@@ -706,6 +731,39 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
   appendAudit?(entry: AuditEntry): MaybePromise<void>;
   queryAudit?(filter: AuditQueryFilter): MaybePromise<AuditEntry[]>;
 }
+
+/**
+ * The 24 required `IMemoryStore` methods. Optional methods (hybrid search,
+ * profiles, pagination, entities, …) are gated by {@link StoreCapabilities}.
+ */
+export const REQUIRED_MEMORY_STORE_METHODS = [
+  "init",
+  "isDegraded",
+  "getCapabilities",
+  "close",
+  "upsertL1",
+  "deleteL1",
+  "deleteL1Batch",
+  "deleteL1Expired",
+  "countL1",
+  "queryL1Records",
+  "getAllL1Texts",
+  "searchL1Vector",
+  "searchL1Fts",
+  "upsertL0",
+  "deleteL0",
+  "deleteL0Expired",
+  "countL0",
+  "queryL0ForL1",
+  "queryL0GroupedBySessionId",
+  "getAllL0Texts",
+  "searchL0Vector",
+  "searchL0Fts",
+  "reindexAll",
+  "isFtsAvailable",
+] as const satisfies readonly (keyof IMemoryStore)[];
+
+export type RequiredMemoryStoreMethod = (typeof REQUIRED_MEMORY_STORE_METHODS)[number];
 
 // ============================
 // IEmbeddingService — re-exported from embedding.ts for convenience

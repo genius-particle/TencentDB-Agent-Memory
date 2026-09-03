@@ -43,6 +43,20 @@ export type {
 // Store pool (per-instanceId Store instances)
 export { StorePool } from "./store/store-pool.js";
 export type { PooledStore, StorePoolOptions, StoreMode } from "./store/store-pool.js";
+export {
+  StoreBackendRegistry,
+  defaultStoreBackendRegistry,
+  resolvePooledStoreBackend,
+} from "./store/registry.js";
+export type {
+  StoreBackendId,
+  StoreBackendFactory,
+  StoreBackendCreateContext,
+  CreatedStoreBackend,
+} from "./store/registry.js";
+export { getSqlitePath } from "./store/sqlite-backend.js";
+export { createStoreBundle } from "./store/factory.js";
+export type { StoreBundle, CreateStoreBundleOptions } from "./store/factory.js";
 
 // Storage backend (unified file/object abstraction).
 // Optional remote object storage backends are loaded dynamically by

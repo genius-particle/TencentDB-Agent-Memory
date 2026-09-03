@@ -594,6 +594,15 @@ export class TcvdbMemoryStore implements IMemoryStore {
       ftsSearch: hasBm25,
       nativeHybridSearch: this.embeddingEnabled && hasBm25,
       sparseVectors: hasBm25,
+      profiles: true,
+      entities: false,
+      audit: true,
+      prompts: true,
+      generationRefs: true,
+      knowledge: true,
+      pagination: true,
+      clearMemoryContent: true,
+      deferredEmbedding: false,
     };
   }
 
