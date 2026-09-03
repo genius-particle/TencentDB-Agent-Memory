@@ -1,0 +1,225 @@
+# Publish memory-core / memory-proxy / memory-hub to GitHub Container Registry.
+#
+# Reuses deploy/dockerhub/publish.sh (same Dockerfiles and contexts as Docker Hub):
+#   memory-core  MemoryCore/
+#   memory-proxy MemoryProxy/ (temp context + cost-guard stub)
+#   memory-hub   deploy/panel-knowledge-combined (panel + knowledge)
+# Does not change Memory store runtime or the published image layout.
+# Private src/integrations is absent on this public fork; proxy cost-guard is
+# stubbed by publish.sh. Do not add extra COPY layers or a new Dockerfile.
+#
+# Does NOT push to Docker Hub (no agentmemory credentials). Uses GITHUB_TOKEN
+# only: permissions contents:read + packages:write. No extra secrets.
+#
+# Platforms: linux/amd64 only (budget). No arm64 matrix.
+#
+# Tags (never a floating :latest without a sha):
+#   - short git sha (immutable VERSION)
+#   - branch slug (or git tag name for v* / GITHUB_REF_NAME)
+#   - feat-server-team moving tag, only on push/dispatch of feat/server_team
+# PR runs may push sha + branch slug + pr-N, but do not move feat-server-team.
+#
+# First GHCR push: workflow_dispatch is registered from the default branch, so
+# until this file is on feat/server_team, open a PR (same-repo GITHUB_TOKEN can
+# packages:write) or merge and then dispatch / push. Fork PRs cannot push.
+#
+# Images:
+#   ghcr.io/genius-particle/tencentdb-agent-memory/memory-core
+#   ghcr.io/genius-particle/tencentdb-agent-memory/memory-proxy
+#   ghcr.io/genius-particle/tencentdb-agent-memory/memory-hub
+#
+# This workflow does not publish npm. Existing pr-ci.yml is unchanged.
+name: GHCR images
+
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [feat/server_team]
+    paths:
+      - "MemoryCore/Dockerfile"
+      - "MemoryCore/.dockerignore"
+      - "MemoryProxy/Dockerfile"
+      - "MemoryProxy/.dockerignore"
+      - "deploy/panel-knowledge-combined/**"
+      - "deploy/dockerhub/publish.sh"
+      - "MemoryPanel/scripts/secret-scan.sh"
+      - ".github/workflows/images.yml"
+  push:
+    branches: [feat/server_team]
+    tags: ["v*"]
+    paths:
+      - "MemoryCore/Dockerfile"
+      - "MemoryCore/.dockerignore"
+      - "MemoryProxy/Dockerfile"
+      - "MemoryProxy/.dockerignore"
+      - "deploy/panel-knowledge-combined/**"
+      - "deploy/dockerhub/publish.sh"
+      - "MemoryPanel/scripts/secret-scan.sh"
+      - ".github/workflows/images.yml"
+
+# Tag pushes only run when the tagged commit also touches the paths above.
+# To publish a v* tag without Dockerfile changes, use workflow_dispatch.
+
+concurrency:
+  group: images-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      # Avoid GHCR 403 on buildx provenance attestations.
+      BUILDX_NO_DEFAULT_ATTESTATIONS: "1"
+      REGISTRY: ghcr.io
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Compute image namespace and tags
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REPOSITORY: ${{ github.repository }}
+          SHA_FULL: ${{ github.sha }}
+          GIT_REF: ${{ github.ref }}
+          REF_NAME: ${{ github.ref_name }}
+          HEAD_REF: ${{ github.head_ref }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          REPO_LC="$(echo "${REPOSITORY}" | tr '[:upper:]' '[:lower:]')"
+          SHA="$(echo "${SHA_FULL}" | cut -c1-7)"
+          slug_ref() {
+            local s="$1"
+            s="$(echo "$s" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9.-]+/-/g; s/^-+//; s/-+$//; s/-{2,}/-/g')"
+            s="${s:0:128}"
+            [[ -n "$s" ]] || s="untagged"
+            printf '%s' "$s"
+          }
+
+          extra=()
+          add_extra() {
+            local t="$1"
+            [[ -z "$t" || "$t" == "$SHA" ]] && return 0
+            local e
+            for e in "${extra[@]+"${extra[@]}"}"; do
+              [[ "$e" == "$t" ]] && return 0
+            done
+            extra+=("$t")
+          }
+
+          PUSH=1
+          if [[ "${EVENT_NAME}" == "pull_request" ]]; then
+            if [[ -n "${HEAD_REPO}" && "${HEAD_REPO}" != "${REPOSITORY}" ]]; then
+              PUSH=0
+              echo "Fork PR: build only, skip GHCR push (GITHUB_TOKEN is read-only for packages)."
+            fi
+            add_extra "$(slug_ref "${HEAD_REF}")"
+            add_extra "pr-${PR_NUMBER}"
+          elif [[ "${GIT_REF}" == refs/tags/* ]]; then
+            add_extra "$(slug_ref "${REF_NAME}")"
+          else
+            add_extra "$(slug_ref "${REF_NAME}")"
+            if [[ "${GIT_REF}" == "refs/heads/feat/server_team" ]]; then
+              add_extra "feat-server-team"
+            fi
+          fi
+
+          EXTRA_TAGS=""
+          if ((${#extra[@]})); then
+            IFS=','; EXTRA_TAGS="${extra[*]}"; unset IFS
+          fi
+
+          {
+            echo "namespace=${REPO_LC}"
+            echo "sha=${SHA}"
+            echo "extra_tags=${EXTRA_TAGS}"
+            echo "push=${PUSH}"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "registry=${REGISTRY}"
+          echo "namespace=${REPO_LC}"
+          echo "version(sha)=${SHA}"
+          echo "extra_tags=${EXTRA_TAGS}"
+          echo "push=${PUSH}"
+
+      - uses: docker/setup-buildx-action@v3
+
+      - uses: docker/login-action@v3
+        if: steps.meta.outputs.push == '1'
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Install rsync
+        run: |
+          set -euo pipefail
+          command -v rsync >/dev/null || {
+            sudo apt-get update -qq
+            sudo apt-get install -y rsync
+          }
+
+      - name: Build and publish via deploy/dockerhub/publish.sh
+        env:
+          REGISTRY: ghcr.io
+          NAMESPACE: ${{ steps.meta.outputs.namespace }}
+          VERSION: ${{ steps.meta.outputs.sha }}
+          EXTRA_TAGS: ${{ steps.meta.outputs.extra_tags }}
+          PLATFORMS: linux/amd64
+          PUSH: ${{ steps.meta.outputs.push }}
+          ALSO_LATEST: "0"
+          SKIP_LOGIN: "1"
+          APT_MIRROR: deb.debian.org
+        run: bash deploy/dockerhub/publish.sh all
+
+      - name: Image URLs
+        if: always()
+        env:
+          NAMESPACE: ${{ steps.meta.outputs.namespace }}
+          SHA: ${{ steps.meta.outputs.sha }}
+          EXTRA_TAGS: ${{ steps.meta.outputs.extra_tags }}
+          PUSHED: ${{ steps.meta.outputs.push }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## GHCR images"
+            echo ""
+            if [[ "$PUSHED" == "1" ]]; then
+              echo "Pushed to \`ghcr.io/${NAMESPACE}/<image>\` (linux/amd64)."
+            else
+              echo "Built locally only (no GHCR push). Merge to \`feat/server_team\` or run **workflow_dispatch** on that branch for the first push."
+            fi
+            echo ""
+            echo "| Image | Tags |"
+            echo "| --- | --- |"
+            for name in memory-core memory-proxy memory-hub; do
+              tags="\`${SHA}\`"
+              if [[ -n "$EXTRA_TAGS" ]]; then
+                IFS=',' read -ra extras <<< "$EXTRA_TAGS"
+                for t in "${extras[@]}"; do
+                  tags+=", \`${t}\`"
+                done
+              fi
+              echo "| \`ghcr.io/${NAMESPACE}/${name}\` | ${tags} |"
+            done
+            echo ""
+            echo "Pull examples (after a successful push):"
+            echo ""
+            echo '```'
+            echo "docker pull ghcr.io/${NAMESPACE}/memory-core:${SHA}"
+            echo "docker pull ghcr.io/${NAMESPACE}/memory-proxy:${SHA}"
+            echo "docker pull ghcr.io/${NAMESPACE}/memory-hub:${SHA}"
+            if [[ "$EXTRA_TAGS" == *feat-server-team* ]]; then
+              echo "docker pull ghcr.io/${NAMESPACE}/memory-core:feat-server-team"
+            fi
+            echo '```'
+            echo ""
+            echo "Public repo: packages can be public. If \`docker pull\` returns 401, set each package visibility to Public under GitHub Packages (no extra secrets required)."
+          } | tee -a "$GITHUB_STEP_SUMMARY"

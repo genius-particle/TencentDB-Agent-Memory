@@ -52,9 +52,11 @@ ALSO_LATEST=1 VERSION=1.0.0 ./publish.sh all
 |---|---|---|
 | `VERSION` | 无（必填） | 镜像 tag |
 | `NAMESPACE` | `agentmemory` | Docker Hub namespace |
-| `REGISTRY` | `docker.io` | 目标 registry |
+| `REGISTRY` | `docker.io` | 目标 registry（GHCR：`ghcr.io`） |
 | `PLATFORMS` | `linux/amd64,linux/arm64` | 多架构构建目标 |
-| `ALSO_LATEST` | `0` | 是否同时推 `:latest` |
+| `ALSO_LATEST` | `0` | 是否同时推 `:latest`（仍会打 `VERSION`，不会只推 latest） |
+| `EXTRA_TAGS` | 空 | 额外 tag，逗号分隔（与 `VERSION` 去重） |
+| `SKIP_LOGIN` | `0` | 置 `1` 跳过脚本内 `docker login`（CI 已 login 时用） |
 | `PUSH` | `1` | 置 `0` 则本地 `--load` 单架构，不推送 |
 | `DRY_RUN` | `0` | 置 `1` 只跑扫描与 context 准备 |
 | `LOAD_PLATFORM` | `linux/amd64` | `PUSH=0` 时本地构建的架构 |
@@ -77,6 +79,12 @@ APT_MIRROR=<your-debian-mirror> VERSION=1.0.0 ./publish.sh all
   的动态 import 失败后自动降级为直通转发。
 - `MemoryCore/src/integrations` 同理，已在 `MemoryCore/.dockerignore` 中排除，
   运行时走 fallback。
+
+## GitHub Actions / GHCR（本 fork）
+
+`.github/workflows/images.yml` 调用本脚本，把三件套推到
+`ghcr.io/<owner>/<repo>/memory-{core,proxy,hub}`（仅 `linux/amd64`）。
+用 `GITHUB_TOKEN` 登录 ghcr.io，**不会**推 Docker Hub。
 
 ## 验证
 

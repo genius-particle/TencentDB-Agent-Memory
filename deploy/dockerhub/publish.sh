@@ -18,8 +18,11 @@
 #
 # 常用环境变量：
 #   NAMESPACE=agentmemory          目标 namespace
+#   REGISTRY=docker.io             目标 registry（GHCR 例：ghcr.io）
 #   PLATFORMS=linux/amd64,linux/arm64
-#   ALSO_LATEST=1                  同时推 :latest
+#   ALSO_LATEST=1                  同时推 :latest（仍会打 VERSION，不会只推 latest）
+#   EXTRA_TAGS=sha,branch-slug     额外 tag，逗号分隔（与 VERSION 去重）
+#   SKIP_LOGIN=1                   跳过脚本内 docker login（CI 已 login 时用）
 #   APT_MIRROR=mirrors.tencent.com 构建期 apt 加速（默认走 Debian 官方源）
 
 set -euo pipefail
@@ -34,6 +37,8 @@ PLATFORMS="${PLATFORMS:-linux/amd64,linux/arm64}"
 BUILDER="${BUILDER:-multiarch}"
 PUSH="${PUSH:-1}"
 ALSO_LATEST="${ALSO_LATEST:-0}"
+EXTRA_TAGS="${EXTRA_TAGS:-}"
+SKIP_LOGIN="${SKIP_LOGIN:-0}"
 DRY_RUN="${DRY_RUN:-0}"
 KEEP_CTX="${KEEP_CTX:-0}"
 APT_MIRROR="${APT_MIRROR:-deb.debian.org}"
@@ -50,7 +55,7 @@ ok()   { echo "${C_GRN}[ok]${C_RST} $*"; }
 warn() { echo "${C_YLW}[warn]${C_RST} $*" >&2; }
 die()  { echo "${C_RED}[error]${C_RST} $*" >&2; exit 1; }
 
-usage() { sed -n '2,26p' "$0"; exit 1; }
+usage() { sed -n '2,30p' "$0"; exit 1; }
 
 # ── 参数校验 ────────────────────────────────────────────────────────
 TARGET="${1:-}"
@@ -82,10 +87,40 @@ ensure_builder() {
   docker buildx inspect "$BUILDER" --bootstrap >/dev/null
 }
 
+# Fill nameref `out` with unique -t image:tag args. VERSION is always included, so
+# ALSO_LATEST=1 never publishes a floating :latest without an immutable tag.
+collect_image_tags() {
+  local image="$1"
+  local -n _tags="$2"
+  local names=("$VERSION")
+  local seen="|$VERSION|"
+  local extra t
+  if [[ "$ALSO_LATEST" == "1" ]]; then
+    names+=("latest")
+    seen+="latest|"
+  fi
+  if [[ -n "$EXTRA_TAGS" ]]; then
+    IFS=',' read -ra extra <<< "$EXTRA_TAGS"
+    for t in "${extra[@]}"; do
+      t="${t#"${t%%[![:space:]]*}"}"
+      t="${t%"${t##*[![:space:]]}"}"
+      [[ -z "$t" ]] && continue
+      [[ "$seen" == *"|${t}|"* ]] && continue
+      names+=("$t")
+      seen+="${t}|"
+    done
+  fi
+  _tags=()
+  for t in "${names[@]}"; do
+    _tags+=(-t "${image}:${t}")
+  done
+}
+
 # build_image <image> <context_dir>
 # PUSH=1 → 多架构 buildx --push；PUSH=0 → 单架构 --load 供本地抽查。
 build_image() {
   local image="$1" ctx="$2"
+  local tags t
 
   if [[ "$PUSH" != "1" ]]; then
     info "PUSH=0 → 本地构建 ${image}:${VERSION} ($LOAD_PLATFORM)"
@@ -101,8 +136,7 @@ build_image() {
     return 0
   fi
 
-  local tags=(-t "${image}:${VERSION}")
-  [[ "$ALSO_LATEST" == "1" ]] && tags+=(-t "${image}:latest")
+  collect_image_tags "$image" tags
 
   info "buildx --push ${image}:${VERSION} ($PLATFORMS)"
   docker buildx build \
@@ -115,9 +149,12 @@ build_image() {
   ok "已推送 ${image}:${VERSION}"
   # 用 if 而非 `[[ ]] && ok`：后者作为函数最后一条语句时，条件为假会让函数返回 1，
   # 在 set -e 下会静默中断整个 all 流程。
-  if [[ "$ALSO_LATEST" == "1" ]]; then
-    ok "已推送 ${image}:latest"
-  fi
+  for t in "${tags[@]}"; do
+    [[ "$t" == -t ]] && continue
+    if [[ "$t" != "${image}:${VERSION}" ]]; then
+      ok "已推送 ${t}"
+    fi
+  done
 }
 
 # 抽查镜像文件系统里有没有混进敏感文件
@@ -271,7 +308,7 @@ build_memory_hub() {
 # ── 主流程 ──────────────────────────────────────────────────────────
 if [[ "$DRY_RUN" != "1" ]]; then
   ensure_builder
-  if [[ "$PUSH" == "1" ]]; then
+  if [[ "$PUSH" == "1" && "$SKIP_LOGIN" != "1" ]]; then
     docker login "$REGISTRY" >/dev/null 2>&1 \
       || warn "未检测到 $REGISTRY 登录态，push 阶段可能失败（先执行 docker login）"
   fi
