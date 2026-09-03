@@ -10,6 +10,12 @@
 #            (or skip if no base is available — missing base_ref must not fail CI).
 # Unit tests do not need Postgres/MinIO. Contract tests use service containers.
 # This workflow does not publish to npmjs or GitHub Packages.
+#
+# Install: Node 22 + npm@10. Always run npm ci (if MemoryCore/package-lock.json
+# exists) or npm install — never skip on cache-hit. Cache key includes npm
+# version + hash of package.json and package-lock.json. The install job does
+# not restore node_modules (avoids a poisoned tree); downstream jobs restore
+# the key that install just saved, then install again.
 name: CI
 
 on:
@@ -32,6 +38,8 @@ jobs:
   install:
     name: Install
     runs-on: ubuntu-latest
+    outputs:
+      cache-key: ${{ steps.meta.outputs.cache-key }}
     steps:
       - uses: actions/checkout@v4
 
@@ -39,18 +47,24 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Cache node_modules
-        uses: actions/cache@v4
-        id: cache-deps
+      - name: Pin npm 10
+        run: npm install -g npm@10
+
+      - name: Cache key
+        id: meta
+        run: |
+          KEY="deps-${RUNNER_OS}-node22-npm-$(npm -v)-${{ hashFiles('MemoryCore/package.json', 'MemoryCore/package-lock.json') }}"
+          echo "cache-key=${KEY}" >> "$GITHUB_OUTPUT"
+          echo "cache key: ${KEY}"
+
+      - name: Install dependencies
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ci-npm-install.sh"
+
+      - name: Save node_modules cache
+        uses: actions/cache/save@v4
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
-
-      - name: npm install
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
-        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
-        run: npm install --ignore-scripts --legacy-peer-deps
+          key: ${{ steps.meta.outputs.cache-key }}
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -64,14 +78,24 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Pin npm 10
+        run: npm install -g npm@10
+
       - name: Restore node_modules
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+          key: ${{ needs.install.outputs.cache-key }}
+
+      - name: Install dependencies
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ci-npm-install.sh"
 
       - name: npm pack (dry-run)
-        run: npm pack --dry-run
+        run: |
+          if [ ! -f scripts/seed-v2/tsconfig.json ]; then
+            npm pkg set scripts.build:seed-v2="echo '[ci] skip seed-v2 (tsconfig absent)'"
+          fi
+          npm pack --dry-run
 
       - name: npm pack
         run: npm pack
@@ -96,18 +120,17 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Pin npm 10
+        run: npm install -g npm@10
+
       - name: Restore node_modules
-        uses: actions/cache@v4
-        id: cache-deps
+        uses: actions/cache/restore@v4
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+          key: ${{ needs.install.outputs.cache-key }}
 
-      - name: npm install
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
-        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
-        run: npm install --ignore-scripts --legacy-peer-deps
+      - name: Install dependencies
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ci-npm-install.sh"
 
       - name: npm test
         run: npm test
@@ -150,18 +173,17 @@ jobs:
         with:
           node-version: "22"
 
+      - name: Pin npm 10
+        run: npm install -g npm@10
+
       - name: Restore node_modules
-        uses: actions/cache@v4
-        id: cache-deps
+        uses: actions/cache/restore@v4
         with:
           path: MemoryCore/node_modules
-          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+          key: ${{ needs.install.outputs.cache-key }}
 
-      - name: npm install
-        if: steps.cache-deps.outputs.cache-hit != 'true'
-        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
-        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
-        run: npm install --ignore-scripts --legacy-peer-deps
+      - name: Install dependencies
+        run: bash "${GITHUB_WORKSPACE}/.github/scripts/ci-npm-install.sh"
 
       - name: Healthcheck Postgres
         run: |
