@@ -62,3 +62,18 @@ export function resolveSqliteDbDir(
   const dbName = resolveMetadataDbName(instanceId, dbPrefix);
   return `${baseDir.replace(/\/$/, "")}/${dbName}`;
 }
+
+/**
+ * Postgres metadata schema per instance.
+ * Distinct from the memory-store `mem_*` schemas so both can share one database.
+ * Identifiers are folded to `[a-z0-9_]` (max 63 bytes).
+ */
+export function postgresMetadataSchemaForInstance(
+  instanceId: string,
+  dbPrefix: string = DEFAULT_METADATA_DB_PREFIX,
+): string {
+  const dbName = resolveMetadataDbName(instanceId, dbPrefix);
+  let cleaned = dbName.toLowerCase().replace(/[^a-z0-9_]/g, "_").slice(0, 63);
+  if (!/^[a-z]/.test(cleaned)) cleaned = `m_${cleaned}`.slice(0, 63);
+  return cleaned;
+}

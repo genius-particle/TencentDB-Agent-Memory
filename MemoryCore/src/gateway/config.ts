@@ -337,6 +337,13 @@ export interface GatewayMetadataStoreConfig {
   storeCacheMaxInstances?: number;
   /** 元数据库名前缀，默认 tdai_metadata；库名 {prefix}_{instance_id} */
   mongoDbPrefix?: string;
+  /**
+   * Explicit metadata backend. Only `postgres` is a selector (OPEN path).
+   * mongodb/sqlite remain inferred from URI / sqliteBaseDir.
+   */
+  backend?: "sqlite" | "mongodb" | "mysql" | "postgres";
+  /** Dedicated Postgres URL for metadata. Not inferred from DATABASE_URL unless backend=postgres. */
+  postgresUrl?: string;
 }
 
 export interface GatewayMemorySystemUserConfig {
@@ -671,7 +678,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
   const memorySystemUserYaml = obj(systemUserYaml, "memory");
   const metadataStore: GatewayMetadataStoreConfig | undefined =
     str(storeYaml, "sqliteBaseDir") || str(storeYaml, "mongoUri") ||
-    str(storeYaml, "mongoDbPrefix") ||
+    str(storeYaml, "mongoDbPrefix") || str(storeYaml, "backend") ||
+    str(storeYaml, "postgresUrl") ||
     bool(storeYaml, "mongoTransactions") !== undefined || num(storeYaml, "storeCacheMaxInstances") !== undefined
       ? {
           sqliteBaseDir: str(storeYaml, "sqliteBaseDir"),
@@ -679,6 +687,8 @@ export function loadGatewayConfig(overrides?: Partial<GatewayConfig>): GatewayCo
           mongoTransactions: bool(storeYaml, "mongoTransactions") ?? true,
           storeCacheMaxInstances: num(storeYaml, "storeCacheMaxInstances"),
           mongoDbPrefix: str(storeYaml, "mongoDbPrefix"),
+          backend: str(storeYaml, "backend") as GatewayMetadataStoreConfig["backend"],
+          postgresUrl: str(storeYaml, "postgresUrl"),
         }
       : undefined;
   const metadata: GatewayMetadataConfig = {

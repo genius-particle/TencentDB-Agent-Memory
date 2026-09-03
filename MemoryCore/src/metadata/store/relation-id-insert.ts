@@ -42,3 +42,53 @@ export function runWithGeneratedRelationId<T>(
   if (lastErr instanceof Error) throw lastErr;
   throw new Error("relation id collision after max retries");
 }
+
+/** Postgres unique violation on 关联表主键 `id`（SQLSTATE 23505）。 */
+export function isPgRelationIdCollision(err: unknown): boolean {
+  if (!isPgUniqueViolation(err)) return false;
+  const hay = `${pgConstraint(err)} ${pgDetail(err)}`;
+  return /(?:_pkey|\bid\b)/i.test(hay) && !/(user_id|team_id|agent_id|task_id|asset_id|key_id|key_value)/i.test(hay);
+}
+
+function pgField(err: unknown, key: "code" | "constraint" | "detail"): string {
+  if (typeof err !== "object" || err === null || !(key in err)) return "";
+  const value = (err as Record<string, unknown>)[key];
+  return value == null ? "" : String(value);
+}
+
+export function isPgUniqueViolation(err: unknown): boolean {
+  return pgField(err, "code") === "23505";
+}
+
+function pgConstraint(err: unknown): string {
+  return pgField(err, "constraint");
+}
+
+function pgDetail(err: unknown): string {
+  return pgField(err, "detail");
+}
+
+/**
+ * 异步版：Postgres 适配器的 insert 返回 Promise。
+ */
+export async function runWithGeneratedRelationIdAsync<T>(
+  fixedId: string | undefined,
+  isCollision: (err: unknown) => boolean,
+  insert: (id: string) => Promise<T>,
+): Promise<T> {
+  if (fixedId) return insert(fixedId);
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < RELATION_ID_RETRY_LIMIT; attempt++) {
+    try {
+      return await insert(generateRelationId());
+    } catch (err) {
+      if (isCollision(err)) {
+        lastErr = err;
+        continue;
+      }
+      throw err;
+    }
+  }
+  if (lastErr instanceof Error) throw lastErr;
+  throw new Error("relation id collision after max retries");
+}

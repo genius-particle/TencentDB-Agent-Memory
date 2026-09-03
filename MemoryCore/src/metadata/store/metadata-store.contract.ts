@@ -1,8 +1,8 @@
 /**
  * IMetadataStore 契约测试套件 —— 与后端无关。
  *
- * 对应实施计划「存储切换测试」：同一套用例分别跑在 SQLite / MongoDB 上，
- * 保证不同后端行为一致。SQLite/MongoDB 各自的 *.test.ts 调用 runMetadataStoreContract。
+ * 对应实施计划「存储切换测试」：同一套用例分别跑在 SQLite / MongoDB / Postgres 上，
+ * 保证不同后端行为一致。各后端的 *.test.ts 调用 runMetadataStoreContract。
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { DuplicateUserKeyError, type IMetadataStore } from "./interface.js";
