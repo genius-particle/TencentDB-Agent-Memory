@@ -1,12 +1,26 @@
+# MemoryCore CI
+#
+# Triggers:
+#   - pull_request targeting main or feat/server_team
+#   - push to feat/server_team (verifies the default branch even without a PR)
+#
+# Jobs: install → pack (.tgz artifact) + unit tests + postgres contracts;
+#       manifest, size guard, skill-queue isolation.
+# Isolation: PRs diff against the PR base; pushes diff origin/feat/server_team~1
+#            (or skip if no base is available — missing base_ref must not fail CI).
+# Unit tests do not need Postgres/MinIO. Contract tests use service containers.
+# This workflow does not publish to npmjs or GitHub Packages.
 name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/server_team]
+  push:
+    branches: [feat/server_team]
 
 # Cancel previous runs for the same PR / branch
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 defaults:
@@ -66,6 +80,154 @@ jobs:
           name: package-tarball
           path: "MemoryCore/*.tgz"
           retention-days: 7
+
+  # ── 3. Unit tests (no extra services) ──────────────────────
+  test:
+    name: Test
+    needs: install
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: MemoryCore/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+
+      - name: npm install
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts
+
+      - name: npm test
+        run: npm test
+
+  # ── 4. Postgres (+ optional MinIO) contracts ───────────────
+  # Env names match MemoryCore/src/core/store/postgres-env.ts and
+  # MemoryCore/src/gateway/metadata-env.ts (no invented variables).
+  contract:
+    name: Contract
+    needs: install
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: memory
+          POSTGRES_PASSWORD: memory
+          POSTGRES_DB: memory
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U memory -d memory"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgres://memory:memory@127.0.0.1:5432/memory
+      PGHOST: 127.0.0.1
+      PGPORT: "5432"
+      PGUSER: memory
+      PGPASSWORD: memory
+      PGDATABASE: memory
+      TDAI_METADATA_BACKEND: postgres
+      TDAI_METADATA_POSTGRES_URL: postgres://memory:memory@127.0.0.1:5432/memory
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Restore node_modules
+        uses: actions/cache@v4
+        id: cache-deps
+        with:
+          path: MemoryCore/node_modules
+          key: deps-${{ runner.os }}-${{ hashFiles('MemoryCore/package.json') }}
+
+      - name: npm install
+        if: steps.cache-deps.outputs.cache-hit != 'true'
+        run: npm install --ignore-scripts
+
+      - name: Healthcheck Postgres
+        run: |
+          node --input-type=module <<'EOF'
+          import pg from "pg";
+          const url = process.env.DATABASE_URL;
+          const deadline = Date.now() + 60_000;
+          let lastErr;
+          while (Date.now() < deadline) {
+            const client = new pg.Client({ connectionString: url });
+            try {
+              await client.connect();
+              await client.query("SELECT 1");
+              try {
+                await client.query("CREATE EXTENSION IF NOT EXISTS vector");
+                console.log("pgvector extension is available");
+              } catch (extErr) {
+                console.warn(
+                  "CREATE EXTENSION vector failed (memory-store contracts need pgvector):",
+                  extErr instanceof Error ? extErr.message : extErr,
+                );
+              }
+              await client.end();
+              console.log("Postgres is ready");
+              process.exit(0);
+            } catch (err) {
+              lastErr = err;
+              try { await client.end(); } catch { /* ignore */ }
+              await new Promise((r) => setTimeout(r, 1000));
+            }
+          }
+          console.error("Postgres did not become ready:", lastErr);
+          process.exit(1);
+          EOF
+
+      # MinIO is optional: S3 live tests skip without creds. Do not fail CI if
+      # the image cannot start; only export S3_* when the health endpoint is up.
+      - name: Start MinIO (optional)
+        id: minio
+        continue-on-error: true
+        working-directory: ${{ github.workspace }}
+        run: |
+          docker run -d --name ci-minio \
+            -p 9000:9000 \
+            -e MINIO_ROOT_USER=minioadmin \
+            -e MINIO_ROOT_PASSWORD=minioadmin \
+            minio/minio server /data
+          for i in $(seq 1 30); do
+            if curl -sf http://127.0.0.1:9000/minio/health/live >/dev/null; then
+              echo "MinIO is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "MinIO did not become ready; S3 live tests will skip"
+          exit 1
+
+      - name: Enable S3 test env
+        if: steps.minio.outcome == 'success'
+        run: |
+          {
+            echo "S3_ENDPOINT=http://127.0.0.1:9000"
+            echo "S3_ACCESS_KEY=minioadmin"
+            echo "S3_SECRET_KEY=minioadmin"
+            echo "S3_BUCKET=tdai-memory"
+            echo "S3_FORCE_PATH_STYLE=true"
+            echo "MINIO_ROOT_USER=minioadmin"
+            echo "MINIO_ROOT_PASSWORD=minioadmin"
+          } >> "$GITHUB_ENV"
+
+      - name: npm test (postgres contracts)
+        run: npm test
 
   # ── 5. Plugin manifest validation ──────────────────────────
   manifest:
@@ -151,9 +313,23 @@ jobs:
           fetch-depth: 0   # 需要完整历史以便 git diff base..HEAD
 
       - name: Run isolation guard
-        env:
-          BASE_REF: origin/${{ github.base_ref || 'main' }}
         run: |
-          git fetch origin "${{ github.base_ref || 'main' }}" --depth=50 || true
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
+            if git fetch origin "${GITHUB_BASE_REF}" --depth=50; then
+              export BASE_REF="origin/${GITHUB_BASE_REF}"
+            else
+              echo "[isolation] could not fetch origin/${GITHUB_BASE_REF}; skipping (missing PR base)"
+              exit 0
+            fi
+          elif git rev-parse --verify --quiet origin/feat/server_team~1 >/dev/null; then
+            export BASE_REF="origin/feat/server_team~1"
+            echo "[isolation] push event: diff against ${BASE_REF}"
+          elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then
+            export BASE_REF="HEAD~1"
+            echo "[isolation] fallback BASE_REF=HEAD~1"
+          else
+            echo "[isolation] no PR base_ref and no parent commit; skipping"
+            exit 0
+          fi
           bash scripts/ci/check-skill-queue-isolation.sh
-
