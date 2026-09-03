@@ -6,8 +6,9 @@
 #
 # Jobs: install → pack (.tgz artifact) + unit tests + postgres contracts;
 #       manifest, size guard, skill-queue isolation.
-# Isolation: PRs diff against the PR base; pushes diff origin/feat/server_team~1
-#            (or skip if no base is available — missing base_ref must not fail CI).
+# Isolation: PRs diff against the PR base (never assume main — this fork
+#            has no main; default base is feat/server_team). Pushes diff
+#            origin/feat/server_team~1 (or skip if no base is available).
 # Unit tests do not need Postgres/MinIO. Contract tests use service containers.
 # This workflow does not publish to npmjs or GitHub Packages.
 #
@@ -343,21 +344,36 @@ jobs:
       - name: Run isolation guard
         run: |
           set -euo pipefail
+          # genius-particle fork has no main; default base is feat/server_team.
+          DEFAULT_BASE="feat/server_team"
+          fetch_base() {
+            local branch="$1"
+            git fetch origin "${branch}" --depth=50
+          }
           if [ "${GITHUB_EVENT_NAME}" = "pull_request" ] && [ -n "${GITHUB_BASE_REF:-}" ]; then
-            if git fetch origin "${GITHUB_BASE_REF}" --depth=50; then
+            if fetch_base "${GITHUB_BASE_REF}"; then
               export BASE_REF="origin/${GITHUB_BASE_REF}"
+            elif fetch_base "${DEFAULT_BASE}"; then
+              echo "[isolation] origin/${GITHUB_BASE_REF} missing; using origin/${DEFAULT_BASE}"
+              export BASE_REF="origin/${DEFAULT_BASE}"
+            elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then
+              export BASE_REF="HEAD~1"
+              echo "[isolation] PR base missing; fallback BASE_REF=HEAD~1"
             else
-              echo "[isolation] could not fetch origin/${GITHUB_BASE_REF}; skipping (missing PR base)"
+              echo "[isolation] no PR base and no parent commit; skipping"
               exit 0
             fi
-          elif git rev-parse --verify --quiet origin/feat/server_team~1 >/dev/null; then
-            export BASE_REF="origin/feat/server_team~1"
+          elif fetch_base "${DEFAULT_BASE}" && git rev-parse --verify --quiet "origin/${DEFAULT_BASE}~1" >/dev/null; then
+            export BASE_REF="origin/${DEFAULT_BASE}~1"
+            echo "[isolation] push event: diff against ${BASE_REF}"
+          elif git rev-parse --verify --quiet "origin/${DEFAULT_BASE}" >/dev/null; then
+            export BASE_REF="origin/${DEFAULT_BASE}"
             echo "[isolation] push event: diff against ${BASE_REF}"
           elif git rev-parse --verify --quiet HEAD~1 >/dev/null; then
             export BASE_REF="HEAD~1"
             echo "[isolation] fallback BASE_REF=HEAD~1"
           else
-            echo "[isolation] no PR base_ref and no parent commit; skipping"
+            echo "[isolation] no ${DEFAULT_BASE} base and no parent commit; skipping"
             exit 0
           fi
           bash scripts/ci/check-skill-queue-isolation.sh

@@ -15,8 +15,8 @@
 #   2) 禁止 src/core/skill/** 新增 `from "node:fs"` / `from "fs"` / `from "fs/promises"` 引用。
 #
 # 用法：
-#   - 本地（与 origin/main 对比）：bash scripts/ci/check-skill-queue-isolation.sh
-#   - CI 中指定 base：BASE_REF=origin/main bash scripts/ci/check-skill-queue-isolation.sh
+#   - 本地（与 origin/feat/server_team 对比）：bash scripts/ci/check-skill-queue-isolation.sh
+#   - CI 中指定 base：BASE_REF=origin/feat/server_team bash scripts/ci/check-skill-queue-isolation.sh
 #   - 跳过（不推荐，仅紧急绕过）：SKIP_SKILL_QUEUE_ISOLATION=1 bash scripts/ci/check-skill-queue-isolation.sh
 #
 # 退出码：
@@ -36,7 +36,8 @@ if ! command -v git >/dev/null 2>&1; then
   exit 2
 fi
 
-BASE_REF="${BASE_REF:-origin/main}"
+# This fork's default branch is feat/server_team (no main). Never assume origin/main.
+BASE_REF="${BASE_REF:-origin/feat/server_team}"
 MODE="${MODE:-auto}"   # auto | working-tree | base-diff
 
 # 若 BASE_REF 不存在（例如 shallow clone），回退到 HEAD~1
