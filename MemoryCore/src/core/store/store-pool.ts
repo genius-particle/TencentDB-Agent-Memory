@@ -5,30 +5,34 @@
  *   - standalone: 使用 SQLite 本地存储 (每个 instanceId 一个 SQLite 文件)
  *   - service: 使用 TCVDB 向量数据库 (每个 instanceId 一个远程 VDB 连接)
  *
- * 与 InstanceConfigProvider 配合:
- *   1. 请求到达时, 从 InstanceConfigProvider 获取该 instanceId 的 VDB 配置
- *   2. 用 VDB 配置创建/复用 Store 实例
- *   3. 池化管理, 避免重复创建连接
+ * Gateway StorePool and plugin createStoreBundle MUST construct stores through
+ * this registry (`StoreBackendRegistry`). Tests fail if either call site bypasses it.
  *
  * standalone 模式下:
  *   - VdbConfig 为空或来自环境变量 → 创建 SQLite Store
  *   - 固定一个 "default" instanceId, 行为与原 createStoreBundle 一致
  */
 
-import path from "node:path";
-import { existsSync, mkdirSync } from "node:fs";
 import type { MemoryTdaiConfig } from "../../config.js";
 import type { IMemoryStore, StoreLogger } from "./types.js";
 import type { EmbeddingService } from "./embedding.js";
-import { createEmbeddingService, NoopEmbeddingService } from "./embedding.js";
-import { VectorStore } from "./sqlite.js";
-import { TcvdbMemoryStore } from "./tcvdb.js";
+import { NoopEmbeddingService } from "./embedding.js";
 import { TcvdbSkillStore } from "./tcvdb-skill-store.js";
 import { createBM25Encoder } from "./bm25-local.js";
 import type { BM25LocalEncoder } from "./bm25-local.js";
 import type { VdbConfig } from "../instance-config-provider.js";
 import type { ISkillStore } from "../skill/skill-store.interface.js";
 import { metricProducer } from "../report/kafka-metric-producer.js";
+import {
+  defaultStoreBackendRegistry,
+  resolvePooledStoreBackend,
+  type StoreBackendRegistry,
+} from "./registry.js";
+import type { StoreMode } from "./registry.js";
+import { ensureBuiltinStoreBackends } from "./backends.js";
+import { getSqlitePath } from "./sqlite-backend.js";
+
+export type { StoreMode } from "./registry.js";
 
 const TAG = "[store-pool]";
 
@@ -56,8 +60,6 @@ interface Logger {
   error: (message: string) => void;
 }
 
-export type StoreMode = "sqlite" | "tcvdb";
-
 export interface KafkaMetricOptions {
   /** Kafka Broker 列表 (逗号分隔或数组) */
   brokers?: string[] | string;
@@ -81,6 +83,8 @@ export interface StorePoolOptions {
   /** Kafka 指标上报配置 (可选, 不配置则不上报) */
   kafka?: KafkaMetricOptions;
   logger: Logger;
+  /** Injected in tests. Production uses {@link defaultStoreBackendRegistry}. */
+  registry?: StoreBackendRegistry;
 }
 
 // ════════════════════════════════════════════════════════
@@ -96,6 +100,7 @@ export class StorePool {
   private logger: Logger;
   /** 全局共享的 BM25 编码器 (避免重复加载 jieba 词典导致 OOM) */
   private sharedBm25Encoder: BM25LocalEncoder | undefined;
+  private readonly registry: StoreBackendRegistry;
 
   /** Skill store 缓存上限 */
   private maxSkillStores: number;
@@ -122,6 +127,7 @@ export class StorePool {
     this.memoryCfg = opts.memoryCfg;
     this.dataDir = opts.dataDir ?? ".";
     this.logger = opts.logger;
+    this.registry = opts.registry ?? ensureBuiltinStoreBackends(defaultStoreBackendRegistry);
 
     // 初始化时创建一次 BM25 编码器, 所有 Store 共享
     this.sharedBm25Encoder = createBM25Encoder(this.memoryCfg.bm25, this.logger as StoreLogger);
@@ -192,10 +198,21 @@ export class StorePool {
       await this.evictLru();
     }
 
-    // 创建新 Store
-    const pooledStore = this.mode === "tcvdb" && vdbConfig
-      ? this.createTcvdbStore(vdbConfig)
-      : this.createSqliteStore(instanceId);
+    // 创建新 Store。mode===tcvdb && !vdbConfig → sqlite（documented silent fallback）。
+    const backendId = resolvePooledStoreBackend(this.mode, vdbConfig);
+    const created = this.registry.create(backendId, {
+      memoryCfg: this.memoryCfg,
+      dataDir: this.dataDir,
+      instanceId,
+      logger: this.logger as StoreLogger,
+      vdbConfig,
+      bm25Encoder: this.sharedBm25Encoder,
+    });
+    const pooledStore: PooledStore = {
+      store: created.store,
+      embedding: (created.embedding ?? new NoopEmbeddingService()) as unknown as EmbeddingService,
+      bm25Encoder: created.bm25Encoder ?? this.sharedBm25Encoder,
+    };
 
     this.pool.set(instanceId, {
       pooledStore,
@@ -203,9 +220,9 @@ export class StorePool {
       lastAccessedAt: now,
     });
 
-    const storeDesc = this.mode === "tcvdb" && vdbConfig
+    const storeDesc = backendId === "tcvdb" && vdbConfig
       ? `${vdbConfig.url} / ${vdbConfig.database}`
-      : `sqlite @ ${this.getSqlitePath(instanceId)}`;
+      : `sqlite @ ${getSqlitePath(this.dataDir, instanceId)}`;
     this.logger.info(
       `${TAG} Created ${this.mode} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
     );
@@ -332,85 +349,6 @@ export class StorePool {
   }
 
   private skillStoreCache = new Map<string, ISkillStore>();
-
-  // ════════════════════════════════════════════════════════
-  // Internal — TCVDB Store
-  // ════════════════════════════════════════════════════════
-
-  private createTcvdbStore(vdbConfig: VdbConfig): PooledStore {
-    // [DEBUG] 本地调试用: 公网 HTTPS 连接 VDB 时需要 CA 证书。
-    // 内网部署走 HTTP 80 端口无需此逻辑。
-    // 通过环境变量 VDB_CA_PEM_PATH 指定 PEM 文件路径。
-    const caPemPath = vdbConfig.url.startsWith("https://")
-      ? (process.env.VDB_CA_PEM_PATH || undefined)
-      : undefined;
-
-    const store = new TcvdbMemoryStore({
-      url: vdbConfig.url,
-      username: vdbConfig.user,
-      apiKey: vdbConfig.apiKey,
-      database: vdbConfig.database,
-      embeddingEnabled: this.memoryCfg.tcvdb?.embeddingEnabled,
-      embeddingModel: this.memoryCfg.tcvdb?.embeddingModel ?? "bge-large-zh",
-      timeout: this.memoryCfg.tcvdb?.timeout ?? 10000,
-      caPemPath,
-      logger: this.logger as StoreLogger,
-      bm25Encoder: this.sharedBm25Encoder ?? undefined,
-    });
-
-    return {
-      store,
-      embedding: new NoopEmbeddingService() as unknown as EmbeddingService,
-      bm25Encoder: this.sharedBm25Encoder,
-    };
-  }
-
-  // ════════════════════════════════════════════════════════
-  // Internal — SQLite Store
-  // ════════════════════════════════════════════════════════
-
-  private createSqliteStore(instanceId: string): PooledStore {
-    // Embedding service (远端 API, 如 OpenAI text-embedding)
-    let embeddingService: EmbeddingService | undefined;
-    const embCfg = this.memoryCfg.embedding;
-    if (embCfg.enabled && embCfg.provider !== "local" && embCfg.provider !== "none" && embCfg.apiKey) {
-      embeddingService = createEmbeddingService({
-        provider: embCfg.provider,
-        baseUrl: embCfg.baseUrl,
-        apiKey: embCfg.apiKey,
-        model: embCfg.model,
-        dimensions: embCfg.dimensions,
-        maxInputChars: embCfg.maxInputChars,
-      }, this.logger as StoreLogger);
-    }
-
-    const dims = embCfg.dimensions ?? 0;
-    const dbPath = this.getSqlitePath(instanceId);
-    // 确保数据库目录存在（对于非 default instance）
-    const dbDir = path.dirname(dbPath);
-    if (!existsSync(dbDir)) {
-      mkdirSync(dbDir, { recursive: true });
-    }
-    const store = new VectorStore(dbPath, dims, this.logger as StoreLogger);
-
-    return {
-      store,
-      embedding: (embeddingService ?? new NoopEmbeddingService()) as unknown as EmbeddingService,
-      bm25Encoder: this.sharedBm25Encoder,
-    };
-  }
-
-  /**
-   * SQLite 文件路径:
-   *   - "default" → dataDir/vectors.db (兼容原逻辑)
-   *   - 其他 instanceId → dataDir/instances/{instanceId}/vectors.db
-   */
-  private getSqlitePath(instanceId: string): string {
-    if (instanceId === "default") {
-      return path.join(this.dataDir, "vectors.db");
-    }
-    return path.join(this.dataDir, "instances", instanceId, "vectors.db");
-  }
 
   // ════════════════════════════════════════════════════════
   // Internal — Common
