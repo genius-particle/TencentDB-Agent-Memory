@@ -21,7 +21,7 @@ describe.skipIf(!hasPostgres)("IMemoryStore contract: postgres", () => {
     ensureBuiltinStoreBackends();
     const cfg = parseConfig({
       storeBackend: "postgres",
-      bm25: { enabled: true, language: "zh" },
+      bm25: { enabled: true, language: "en" },
       embedding: { provider: "none" },
     });
     const bm25Encoder = createBM25Encoder(cfg.bm25);
