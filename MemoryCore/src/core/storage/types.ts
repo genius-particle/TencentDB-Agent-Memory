@@ -90,13 +90,15 @@ export interface ListResult {
  * Implementations:
  * - `LocalStorageBackend` (local-backend.ts) — local filesystem, for dev/free mode
  * - `CosStorageBackend`  (cos-backend.ts)   — Tencent Cloud COS, for production
+ * - `S3StorageBackend`   (s3-backend.ts)    — MinIO / S3-compatible, optional
  *
  * All methods are async. Errors are thrown as exceptions (unlike IMemoryStore
  * which swallows errors); callers should handle appropriately.
  */
 export interface IStorageBackend {
   /** Storage backend identifier for logging/diagnostics. */
-  readonly type: "local" | "cos";
+  /** Storage backend identifier for logging/diagnostics. */
+  readonly type: "local" | "cos" | "s3";
 
   /**
    * Write an object (create or overwrite).
@@ -208,14 +210,26 @@ export interface ICredentialProvider {
 
 /** Configuration for creating a storage backend. */
 export interface StorageBackendConfig {
-  /** Backend type: "local" for dev, "cos" for production. */
-  type: "local" | "cos";
+  /** Backend type: "local" for dev, "cos" for production COS, "s3" for MinIO/S3. */
+  type: "local" | "cos" | "s3";
 
   /** Local backend: root directory for file storage. */
   localRootDir?: string;
 
   /** COS backend: credential provider instance. */
   credentialProvider?: ICredentialProvider;
+
+  /** S3 / MinIO: passed through to S3StorageBackend. */
+  s3?: {
+    endpoint?: string;
+    region?: string;
+    bucket: string;
+    accessKeyId: string;
+    secretAccessKey: string;
+    sessionToken?: string;
+    prefix?: string;
+    forcePathStyle?: boolean;
+  };
 }
 
 /** Minimal logger interface for storage operations. */

@@ -10,6 +10,8 @@
 | **Standalone（开源单机版）** | SQLite + 本地文件 | 进程内 Map / Timer | 单空间 | 本地开发、单 Agent sidecar、Docker 一体化、离线部署 |
 | **Service（云服务化版）** | TCVDB + COS | Redis（分布式锁 + 任务队列） | 多空间 per-`service_id` | K8s 多副本、多租户 SaaS、多 Agent 共享记忆 |
 
+第三种为 **可选开源服务骨架**（Postgres+pgvector + MinIO + Redis），通过 `STORE_MODE=postgres` / `STORAGE_BACKEND=s3` 显式选择，**不改变** `deployMode=service` 的线上默认（仍是 tcvdb+cos+redis+mongo）。见 [docs/store-open-backends.md](docs/store-open-backends.md) 与 [deploy/compose/open-service.yml](deploy/compose/open-service.yml)。
+
 ```
 L0  对话原始记录 (Conversation)    ← 自动写入
 L1  原子化结构记忆 (Atomic Memory)  ← LLM 提取 + 去重

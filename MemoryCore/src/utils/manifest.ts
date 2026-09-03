@@ -20,7 +20,7 @@ import path from "node:path";
 // ============================
 
 export interface ManifestStoreInfo {
-  type: "sqlite" | "tcvdb";
+  type: "sqlite" | "tcvdb" | "postgres";
   sqlite?: {
     /** Relative path to the SQLite DB file (relative to dataDir). */
     path: string;
@@ -30,6 +30,9 @@ export interface ManifestStoreInfo {
     database: string;
     /** User-friendly alias (optional). */
     alias?: string;
+  };
+  postgres?: {
+    schema: string;
   };
 }
 
@@ -101,11 +104,12 @@ export function writeManifest(dataDir: string, manifest: Manifest): void {
 // ============================
 
 export interface StoreConfigSnapshot {
-  type: "sqlite" | "tcvdb";
+  type: "sqlite" | "tcvdb" | "postgres";
   sqlitePath?: string;
   tcvdbUrl?: string;
   tcvdbDatabase?: string;
   tcvdbAlias?: string;
+  postgresSchema?: string;
 }
 
 /**
@@ -115,6 +119,8 @@ export function buildStoreInfo(snapshot: StoreConfigSnapshot): ManifestStoreInfo
   const info: ManifestStoreInfo = { type: snapshot.type };
   if (snapshot.type === "sqlite") {
     info.sqlite = { path: snapshot.sqlitePath ?? "vectors.db" };
+  } else if (snapshot.type === "postgres") {
+    info.postgres = { schema: snapshot.postgresSchema ?? "mem_default" };
   } else {
     info.tcvdb = {
       url: snapshot.tcvdbUrl!,
@@ -152,6 +158,12 @@ export function diffStoreBinding(
     }
     if (persisted.tcvdb?.database !== current.tcvdb?.database) {
       diffs.push(`tcvdb database changed: ${persisted.tcvdb?.database} → ${current.tcvdb?.database}`);
+    }
+  }
+
+  if (persisted.type === "postgres" && current.type === "postgres") {
+    if (persisted.postgres?.schema !== current.postgres?.schema) {
+      diffs.push(`postgres schema changed: ${persisted.postgres?.schema} → ${current.postgres?.schema}`);
     }
   }
 

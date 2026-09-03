@@ -507,7 +507,8 @@ export interface KnowledgeListResult {
  *
  * Implementations:
  * - `SqliteMemoryStore` (sqlite.ts) — local SQLite + sqlite-vec + FTS5
- * - `TcvdbMemoryStore` (tcvdb.ts) — Tencent Cloud VectorDB (future)
+ * - `TcvdbMemoryStore` (tcvdb.ts) — Tencent Cloud VectorDB
+ * - `PostgresMemoryStore` (postgres.ts) — Postgres + pgvector (open-service)
  *
  * All methods are fault-tolerant: they return empty results or `false` on
  * failure rather than throwing, unless explicitly documented otherwise.

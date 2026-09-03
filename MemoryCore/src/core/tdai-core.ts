@@ -842,7 +842,7 @@ export class TdaiCore {
         this.cfg.cos?.bucket
       );
       const probe: SkillEnvProbe = {
-        outerStoreBackend: this.cfg.storeBackend,
+        outerStoreBackend: this.cfg.storeBackend === "tcvdb" ? "tcvdb" : "sqlite",
         hasTcvdbCredentials: tcvdbHasCreds,
         hasCosCredentials: cosHasCreds,
         embeddingAvailable:

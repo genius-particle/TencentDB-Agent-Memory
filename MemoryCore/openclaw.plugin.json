@@ -21,9 +21,9 @@
       },
       "storeBackend": {
         "type": "string",
-        "enum": ["sqlite", "tcvdb"],
+        "enum": ["sqlite", "tcvdb", "postgres"],
         "default": "sqlite",
-        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）或 tcvdb（腾讯云向量数据库）。仅 local/function 模式生效"
+        "description": "存储后端：sqlite（本地 SQLite + sqlite-vec）、tcvdb（腾讯云向量数据库）或 postgres（Postgres + pgvector，需 DATABASE_URL）。仅 local/function 模式生效。默认 sqlite，不会因未配置 postgres 而改写 service 的 tcvdb 默认值"
       },
       "server": {
         "type": "object",
@@ -125,9 +125,17 @@
           "caPemPath": { "type": "string", "description": "CA 证书 PEM 文件路径（HTTPS 连接时使用）" }
         }
       },
+      "postgres": {
+        "type": "object",
+        "description": "Postgres + pgvector 配置（仅 storeBackend=postgres 时生效；也可用 DATABASE_URL / PG* 环境变量）",
+        "properties": {
+          "url": { "type": "string", "description": "Postgres 连接串（可选，默认读 DATABASE_URL）" },
+          "schema": { "type": "string", "description": "Schema 名（可选，默认 mem_{instanceId}）" }
+        }
+      },
       "bm25": {
         "type": "object",
-        "description": "BM25 稀疏向量编码设置（主要用于 tcvdb 后端）",
+        "description": "BM25 稀疏向量编码设置（tcvdb 与 postgres 后端：客户端 jieba，不使用 pg_jieba）",
         "properties": {
           "enabled": { "type": "boolean", "default": true, "description": "是否启用 BM25 稀疏向量编码" },
           "language": { "type": "string", "enum": ["zh", "en"], "default": "zh", "description": "分词语言：zh（中文）或 en（英文）" }

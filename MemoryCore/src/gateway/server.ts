@@ -54,6 +54,11 @@ import { initObservabilityBackend } from "../core/report/factory.js";
 import type { ObservabilityConfig as CoreObservabilityConfig } from "../core/report/types.js";
 import { TracedTaskExecutor } from "../core/report/traced-task-executor.js";
 import { StorePool } from "../core/store/store-pool.js";
+import {
+  S3StorageBackend,
+  resolveBlobBackendKind,
+  resolveS3Config,
+} from "../core/storage/s3-backend.js";
 import { validateAndNormalizeRaw, SeedValidationError } from "../core/seed/input.js";
 import { executeSeed } from "../core/seed/seed-runtime.js";
 import type { SeedProgress } from "../core/seed/types.js";
@@ -305,6 +310,8 @@ export class TdaiGateway {
   // ── COS: global shared client singleton + per-instance StorageAdapter cache ──
   private sharedCosClient: import("../integrations/cos/cos-backend.js").SharedCosClient | null = null;
   private cosStorageCache: Map<string, StorageAdapter> | null = null;
+  /** Optional S3/MinIO backend. Only set when STORAGE_BACKEND=s3; COS path unchanged otherwise. */
+  private sharedS3Backend: S3StorageBackend | null = null;
 
   // ── Metadata (v3): shared store pool + per-instance MetadataService ──
   private metadataStorePool: MetadataStorePool | null = null;
@@ -1785,9 +1792,13 @@ export class TdaiGateway {
     // service-mode integration smoke tests where Redis + COS are real but no
     // VDB is available — set STORE_MODE=sqlite to keep the VDB-dependent
     // pieces local while exercising the rest of the service-mode wiring.
-    const storeModeOverride = process.env.STORE_MODE === "sqlite" || process.env.STORE_MODE === "tcvdb"
-      ? (process.env.STORE_MODE as "sqlite" | "tcvdb")
-      : undefined;
+    // STORE_MODE=postgres selects the open pgvector backend without flipping
+    // deployMode=service defaults (still tcvdb when this env is unset).
+    const rawStoreMode = process.env.STORE_MODE?.trim();
+    const storeModeOverride =
+      rawStoreMode === "sqlite" || rawStoreMode === "tcvdb" || rawStoreMode === "postgres"
+        ? rawStoreMode
+        : undefined;
     this.storePool = new StorePool({
       mode: storeModeOverride ?? (this.config.deployMode === "service" ? "tcvdb" : "sqlite"),
       memoryCfg: this.config.memory,
@@ -1802,9 +1813,13 @@ export class TdaiGateway {
     });
     this.logger.info(`Instance Config Provider + Store Pool initialized (mode=${this.config.deployMode})`);
 
-    // 1.3. Switch Core's default storage to remote object storage in service mode.
-    // This ensures v1 API (capture/recall) also writes L0/L1 to shared storage instead of local filesystem.
-    if (this.config.deployMode === "service") {
+    // 1.3. Switch Core's default storage.
+    // STORAGE_BACKEND=s3 selects MinIO/S3 without touching live COS defaults.
+    // deployMode=service still initializes COS when STORAGE_BACKEND is unset.
+    const blobKind = resolveBlobBackendKind(this.config.deployMode);
+    if (blobKind === "s3") {
+      await this.initSharedS3Client();
+    } else if (this.config.deployMode === "service") {
       await this.initSharedCosClient();
     }
 
@@ -1881,6 +1896,17 @@ export class TdaiGateway {
     const cachedStorage = this.cosStorageCache?.get(instanceId);
     if (cachedStorage) {
       storage = cachedStorage;
+    } else if (resolveBlobBackendKind(this.config.deployMode) === "s3") {
+      if (!this.sharedS3Backend) await this.initSharedS3Client();
+      if (!this.sharedS3Backend) {
+        throw new SkillCoreError(
+          "SKILL_COS_REQUIRED",
+          "S3 storage not initialized for this instance (STORAGE_BACKEND=s3).",
+        );
+      }
+      storage = this.s3AdapterForInstance(instanceId);
+      if (!this.cosStorageCache) this.cosStorageCache = new Map();
+      this.cosStorageCache.set(instanceId, storage);
     } else if (sharedCosClient) {
       const cosConfig = await configProvider.resolveCos();
       if (cosConfig?.cosUrl) {
@@ -2424,6 +2450,17 @@ export class TdaiGateway {
     const cached = this.cosStorageCache?.get(instanceId);
     if (cached) return cached;
 
+    if (resolveBlobBackendKind(this.config.deployMode) === "s3") {
+      if (!this.sharedS3Backend) await this.initSharedS3Client();
+      if (!this.sharedS3Backend) {
+        throw new Error(`S3 storage not initialized for instance ${instanceId}`);
+      }
+      const adapter = this.s3AdapterForInstance(instanceId);
+      if (!this.cosStorageCache) this.cosStorageCache = new Map();
+      this.cosStorageCache.set(instanceId, adapter);
+      return adapter;
+    }
+
     // Standalone mode: fall back to local storage (no COS needed)
     if (!this.sharedCosClient && this.config.deployMode === "standalone") {
       const localDir = this.config.data.baseDir;
@@ -2566,6 +2603,44 @@ export class TdaiGateway {
   }
 
   /**
+   * Optional S3/MinIO blob backend. Only used when STORAGE_BACKEND=s3.
+   * Does not change COS init or fail-hard behaviour when that env is unset.
+   */
+  private async initSharedS3Client(): Promise<void> {
+    if (this.sharedS3Backend) return;
+    const cfg = resolveS3Config();
+    if (!cfg) {
+      this.logger.error(`${TAG} STORAGE_BACKEND=s3 but S3_BUCKET / S3_ACCESS_KEY / S3_SECRET_KEY are missing`);
+      return;
+    }
+    try {
+      const root = new S3StorageBackend({ ...cfg, logger: this.logger });
+      await root.ensureBucket();
+      this.sharedS3Backend = root;
+      const defaultInstanceId = this.config.instanceId ?? "default";
+      const adapter = this.s3AdapterForInstance(defaultInstanceId);
+      this.core.setStorage(adapter);
+      this.logger.info(`${TAG} Core default storage switched to S3 (bucket=${cfg.bucket}, endpoint=${cfg.endpoint ?? "aws"})`);
+    } catch (err) {
+      this.logger.error(
+        `${TAG} S3 init failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  private s3AdapterForInstance(instanceId: string): StorageAdapter {
+    const cfg = resolveS3Config();
+    if (!cfg) throw new Error("S3 config unavailable");
+    const prefixParts = [cfg.prefix?.replace(/\/$/, ""), instanceId].filter(Boolean);
+    const backend = new S3StorageBackend({
+      ...cfg,
+      prefix: `${prefixParts.join("/")}/`,
+      logger: this.logger,
+    });
+    return new StorageAdapter(backend);
+  }
+
+  /**
    * Build a TaskExecutor that bridges Pipeline tasks to TdaiCore's existing L1/L2/L3 runners.
    *
    * Multi-instance aware: each task carries a instanceId in task.data.
@@ -2597,12 +2672,28 @@ export class TdaiGateway {
       }
 
       // Standalone mode: use local storage (no COS needed)
-      if (!gateway.sharedCosClient && gateway.config.deployMode === "standalone") {
+      if (!gateway.sharedCosClient && gateway.config.deployMode === "standalone"
+        && resolveBlobBackendKind(gateway.config.deployMode) !== "s3") {
         const cached = gateway.cosStorageCache?.get(instanceId);
         if (cached) return cached;
         const localDir = gateway.config.data.baseDir;
         const backend = new LocalStorageBackend({ rootDir: localDir, logger: gateway.logger });
         const adapter = new StorageAdapter(backend);
+        if (!gateway.cosStorageCache) gateway.cosStorageCache = new Map();
+        gateway.cosStorageCache.set(instanceId, adapter);
+        return adapter;
+      }
+
+      if (resolveBlobBackendKind(gateway.config.deployMode) === "s3") {
+        if (!gateway.sharedS3Backend) {
+          await gateway.initSharedS3Client();
+        }
+        if (!gateway.sharedS3Backend) {
+          throw new Error(`S3 storage not initialized for worker task ${task.id} (instance=${instanceId})`);
+        }
+        const cachedS3 = gateway.cosStorageCache?.get(instanceId);
+        if (cachedS3) return cachedS3;
+        const adapter = gateway.s3AdapterForInstance(instanceId);
         if (!gateway.cosStorageCache) gateway.cosStorageCache = new Map();
         gateway.cosStorageCache.set(instanceId, adapter);
         return adapter;

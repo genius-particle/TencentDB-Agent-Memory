@@ -14,7 +14,7 @@
 import type { IStorageBackend, StorageObject, ListEntry, ListObjectsOptions, ListResult, PutObjectOptions } from "./types.js";
 
 class ScopedStorageBackend implements IStorageBackend {
-  readonly type: "local" | "cos";
+  readonly type: "local" | "cos" | "s3";
   private readonly prefix: string;
 
   constructor(private readonly base: IStorageBackend, prefix: string) {
@@ -123,6 +123,7 @@ export class StorageAdapter {
    * to backend.appendObject which uses:
    *   - LocalStorageBackend: POSIX fs.appendFile (O_APPEND atomic)
    *   - CosStorageBackend: COS Append Object API (server-side atomic + 409 retry)
+   *   - S3StorageBackend: read-modify-write (no native append; JSONL keys unchanged)
    */
   async appendFile(key: string, content: string): Promise<void> {
     return this.backend.appendObject(key, content);

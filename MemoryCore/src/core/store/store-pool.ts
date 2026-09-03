@@ -70,7 +70,7 @@ export interface KafkaMetricOptions {
 }
 
 export interface StorePoolOptions {
-  /** 存储模式: "sqlite" (standalone 本地) 或 "tcvdb" (service 远程) */
+  /** 存储模式: "sqlite" | "tcvdb" | "postgres"。service 默认仍为 tcvdb（STORE_MODE 可覆盖）。 */
   mode: StoreMode;
   /** 记忆插件配置 (用于 BM25/embedding 设置) */
   memoryCfg: MemoryTdaiConfig;
@@ -178,7 +178,9 @@ export class StorePool {
     const now = Date.now();
     const fingerprint = this.mode === "tcvdb" && vdbConfig
       ? this.computeFingerprint(vdbConfig)
-      : `sqlite:${instanceId}`;
+      : this.mode === "postgres"
+        ? `postgres:${instanceId}`
+        : `sqlite:${instanceId}`;
     const cached = this.pool.get(instanceId);
 
     // 命中且配置未变
@@ -222,7 +224,9 @@ export class StorePool {
 
     const storeDesc = backendId === "tcvdb" && vdbConfig
       ? `${vdbConfig.url} / ${vdbConfig.database}`
-      : `sqlite @ ${getSqlitePath(this.dataDir, instanceId)}`;
+      : backendId === "postgres"
+        ? `postgres schema mem_${instanceId === "default" ? "default" : instanceId}`
+        : `sqlite @ ${getSqlitePath(this.dataDir, instanceId)}`;
     this.logger.info(
       `${TAG} Created ${this.mode} store for ${instanceId}: ${storeDesc} (pool size: ${this.pool.size})`,
     );
