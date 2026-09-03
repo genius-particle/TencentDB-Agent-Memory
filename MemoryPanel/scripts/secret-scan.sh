@@ -34,7 +34,9 @@ else
 fi
 
 # 已知安全的占位字符串，命中即视为非泄漏
-PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"|task-draft-generator'
+# 含 ${KEY_PLACEHOLDER} 这类模板、以及 `task-optional-memory`（其中的 `task-`
+# 子串会误撞 `sk-` 规则，下面规则 1 也加了词边界，这里再挡一层）。
+PLACEHOLDER='xxx|your-|example|REPLACE_|placeholder|<[A-Z_]+>|[$][{][A-Z_]+[}]|dummy|fake|test-|demo-|sample|bogus|invalid-|knowledge-debug|-debug"|task-draft-generator|task-optional-memory'
 
 # 需要豁免的路径（示例代码 / 已知 demo 密码 / gitignored 本地文件）
 EXEMPT_PATH='node_modules/|/dist/|/build/|\.example\.|/docs/|README\.md|\.md:|\.test\.|__tests__/'
@@ -48,7 +50,8 @@ trap "rm -f $tmp" EXIT
 for t in "${TARGETS[@]}"; do
   [[ -e "$t" ]] || continue
   # ── 规则 1: sk- prefix keys ──
-  grep -rEn "sk-[a-zA-Z0-9_-]{15,}" "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
+  # 词边界：避免 `task-optional-memory` 这类标识里的 `…sk-…` 子串误报。
+  grep -rEn '(^|[^A-Za-z0-9])sk-[a-zA-Z0-9_-]{15,}' "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
 
   # ── 规则 2: Bearer tokens ──
   grep -rEn 'Bearer[[:space:]]+[A-Za-z0-9._+/=~-]{15,}' "$t" 2>/dev/null | grep -Ev "$PLACEHOLDER" >> "$tmp" || true
@@ -65,6 +68,10 @@ done
 
 # 应用豁免路径 + gitignored（gitignored 文件不会入 commit / 镜像，无泄漏面）
 final=$(grep -Ev "$EXEMPT_PATH" "$tmp" || true)
+# 行内豁免（错误提示里写了，这里真正过滤）
+if [[ -n "$final" ]]; then
+  final=$(printf '%s\n' "$final" | grep -Ev 'secret-scan-ignore' || true)
+fi
 
 # gitignored 过滤：逐行提取路径，用 git check-ignore -q 判定；命中即豁免
 if git rev-parse --show-toplevel >/dev/null 2>&1 && [[ -n "$final" ]]; then

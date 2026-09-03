@@ -42,6 +42,7 @@ on:
       - "MemoryProxy/.dockerignore"
       - "deploy/panel-knowledge-combined/**"
       - "deploy/dockerhub/publish.sh"
+      - "MemoryPanel/scripts/secret-scan.sh"
       - ".github/workflows/images.yml"
   push:
     branches: [feat/server_team]
@@ -53,6 +54,7 @@ on:
       - "MemoryProxy/.dockerignore"
       - "deploy/panel-knowledge-combined/**"
       - "deploy/dockerhub/publish.sh"
+      - "MemoryPanel/scripts/secret-scan.sh"
       - ".github/workflows/images.yml"
 
 # Tag pushes only run when the tagged commit also touches the paths above.
