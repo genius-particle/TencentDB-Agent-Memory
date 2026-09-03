@@ -48,7 +48,9 @@ jobs:
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
+        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
+        run: npm install --ignore-scripts --legacy-peer-deps
 
   # ── 2. Pack validation ─────────────────────────────────────
   pack:
@@ -103,7 +105,9 @@ jobs:
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
+        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
+        run: npm install --ignore-scripts --legacy-peer-deps
 
       - name: npm test
         run: npm test
@@ -155,7 +159,9 @@ jobs:
 
       - name: npm install
         if: steps.cache-deps.outputs.cache-hit != 'true'
-        run: npm install --ignore-scripts
+        # Arborist on npm 10.x can throw "Cannot read properties of null (reading 'edgesOut')"
+        # on this peer tree (openclaw / node-llama-cpp). --legacy-peer-deps matches a green local install.
+        run: npm install --ignore-scripts --legacy-peer-deps
 
       - name: Healthcheck Postgres
         run: |
