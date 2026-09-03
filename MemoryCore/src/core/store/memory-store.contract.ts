@@ -167,12 +167,10 @@ export function runMemoryStoreContract(
   it(`[${name}] FTS search hits inserted text when ftsSearch is advertised`, async (ctx) => {
     const store = getStore();
     if (!skipUnlessCap(ctx, store, "ftsSearch")) return;
-    // Hyphen-free so postgres ILIKE fallback (after FTS5→plain text) still matches.
-    // SQLite FTS5 treats this as a single token either way.
-    const rec = sampleL0({ messageText: "uniqueftstokenalpha" });
+    const rec = sampleL0({ messageText: "zxqv-unique-fts-token-alpha" });
     expect(await store.upsertL0(rec)).toBe(true);
     expect(store.isFtsAvailable()).toBe(true);
-    const q = buildFtsQuery("uniqueftstokenalpha");
+    const q = buildFtsQuery("zxqv-unique-fts-token-alpha");
     expect(q).toBeTruthy();
     const hits = await store.searchL0Fts(q!, 10);
     expect(hits.some((h) => h.record_id === rec.id)).toBe(true);

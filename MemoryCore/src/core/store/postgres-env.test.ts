@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { ftsQueryToText, sparseToPairs, toSparsevecLiteral, toVectorLiteral } from "./sparsevec.js";
+import { ftsIlikePatterns, ftsLexicalTokens, ftsQueryToText, sparseToPairs, toSparsevecLiteral, toVectorLiteral } from "./sparsevec.js";
 import { hasPostgresEnv, resolvePostgresConnection } from "./postgres-env.js";
 import { resolveBlobBackendKind } from "../storage/s3-backend.js";
 import { buildFtsQuery } from "./sqlite.js";
@@ -27,6 +27,16 @@ describe("sparsevec literals (no database required)", () => {
     expect(q).toBeTruthy();
     const text = ftsQueryToText(q!);
     expect(text.toLowerCase()).toContain("unique");
+  });
+
+  it("ftsIlikePatterns splits hyphenated / FTS5 queries into token ILIKE patterns", () => {
+    expect(ftsLexicalTokens("unique fts token alpha")).toEqual([
+      "unique", "fts", "token", "alpha",
+    ]);
+    expect(ftsIlikePatterns("unique fts token alpha")).toEqual([
+      "%unique%", "%fts%", "%token%", "%alpha%",
+    ]);
+    expect(ftsIlikePatterns("uniqueftstokenalpha")).toEqual(["%uniqueftstokenalpha%"]);
   });
 });
 
