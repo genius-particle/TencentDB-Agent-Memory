@@ -38,6 +38,9 @@ on:
     paths:
       - "MemoryCore/Dockerfile"
       - "MemoryCore/.dockerignore"
+      - "MemoryCore/package.json"
+      - "MemoryCore/package-lock.json"
+      - "MemoryCore/src/**"
       - "MemoryProxy/Dockerfile"
       - "MemoryProxy/.dockerignore"
       - "deploy/panel-knowledge-combined/**"
@@ -50,6 +53,9 @@ on:
     paths:
       - "MemoryCore/Dockerfile"
       - "MemoryCore/.dockerignore"
+      - "MemoryCore/package.json"
+      - "MemoryCore/package-lock.json"
+      - "MemoryCore/src/**"
       - "MemoryProxy/Dockerfile"
       - "MemoryProxy/.dockerignore"
       - "deploy/panel-knowledge-combined/**"
