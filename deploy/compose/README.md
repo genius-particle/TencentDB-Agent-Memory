@@ -30,3 +30,5 @@ Metadata uses schemas `tdai_metadata_*` on the same Postgres instance as memory 
 Do not set `TDAI_METADATA_MONGO_URI` on this path unless you intend to use Mongo.
 
 See [docs/store-open-backends.md](../../docs/store-open-backends.md).
+
+K8s 不要用这份 compose，用 [deploy/helm/tdai-memory](../helm/tdai-memory)。

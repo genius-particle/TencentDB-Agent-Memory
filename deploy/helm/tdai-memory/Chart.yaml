@@ -1,0 +1,19 @@
+apiVersion: v2
+name: tdai-memory
+description: >
+  TencentDB Agent Memory fork chart. Installs memory-core / memory-hub / memory-proxy
+  from GHCR. Standalone default: Postgres+pgvector memory, Postgres metadata,
+  local-disk blobs (STORAGE_BACKEND unset), Redis pipeline state (STATE_BACKEND=redis).
+  MinIO is opt-in. SQLite trial uses values-sqlite.yaml (stateBackend=local). TDAI_DEPLOY_MODE stays standalone.
+type: application
+version: 0.2.0
+appVersion: feat-server-team
+home: https://github.com/genius-particle/TencentDB-Agent-Memory
+sources:
+  - https://github.com/genius-particle/TencentDB-Agent-Memory
+keywords:
+  - tencentdb
+  - agent-memory
+  - tdai
+maintainers:
+  - name: genius-particle

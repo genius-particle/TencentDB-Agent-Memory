@@ -1,0 +1,228 @@
+# Default matches this fork's public standalone code:
+#   memory=postgres+pgvector, metadata=postgres, blobs=local (unset STORAGE_BACKEND),
+#   state=redis (LocalStateBackend when stateBackend=local / redis.deploy=false).
+# SQLite trial: -f values-sqlite.yaml
+# 170 host: -f values-eodev.yaml (namespace tdai-open, Qingdao images, ParadeDB)
+
+nameOverride: ""
+fullnameOverride: ""
+
+imagePullSecrets: []
+
+image:
+  registry: ghcr.io/genius-particle/tencentdb-agent-memory
+  tag: feat-server-team
+  pullPolicy: Always
+  core:
+    repository: memory-core
+  hub:
+    repository: memory-hub
+  proxy:
+    repository: memory-proxy
+
+# sqlite | postgres  (postgres = STORE_MODE + metadata postgres from PRs #4/#5)
+# Never set deployMode=service here — that path still expects TCVDB+COS+Mongo.
+# STORAGE_BACKEND is unset unless minio.deploy / minio.endpoint (standalone → local disk).
+store:
+  mode: postgres
+
+# Pipeline state backend: redis (default) or local (process Map/setTimeout).
+stateBackend: redis
+
+# TDAI_GATEWAY_API_KEY. Keep empty: proxy auth/verify does not send Bearer.
+gatewayApiKey: ""
+
+scanner:
+  intervalMs: 8000
+
+llm:
+  baseUrl: ""
+  apiKey: ""
+  model: ""
+  protocol: openai
+
+embedding:
+  provider: siliconflow
+  baseUrl: https://api.siliconflow.cn/v1
+  apiKey: ""
+  model: BAAI/bge-m3
+  dimensions: 1024
+  sendDimensions: false
+
+admin:
+  username: admin
+  userKey: sk-mem-LocalTrialAdminKeyChangeMe000001
+
+# If set, skip creating the LLM/admin Secret and read keys from this name.
+existingSecret: ""
+
+public:
+  # Node IP / DNS used to build laptop-reachable Proxy and Knowledge URLs
+  # when proxyUrl / knowledgeUrl are empty (NodePort installs).
+  host: ""
+  knowledgeUrl: ""
+  proxyUrl: ""
+
+core:
+  replicaCount: 1
+  service:
+    type: NodePort
+    port: 8420
+    nodePort: 30420
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+    accessMode: ReadWriteOnce
+
+hub:
+  replicaCount: 1
+  service:
+    type: NodePort
+    panelPort: 8125
+    panelNodePort: 30125
+    knowledgePort: 8424
+    knowledgeNodePort: 30424
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 20Gi
+    accessMode: ReadWriteOnce
+
+proxy:
+  replicaCount: 1
+  upstream:
+    url: ""
+    apiKey: ""
+    model: ""
+  skillTimeoutMs: 5000
+  authTimeoutMs: 5000
+  service:
+    type: NodePort
+    port: 8096
+    nodePort: 30096
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      cpu: "1"
+      memory: 2Gi
+  persistence:
+    enabled: false
+    storageClass: local-path
+    size: 1Gi
+    accessMode: ReadWriteOnce
+
+ingress:
+  enabled: true
+  className: traefik
+  host: ""
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+
+initAdmin:
+  enabled: true
+
+redis:
+  deploy: true
+  # External Redis when deploy=false and stateBackend=redis.
+  host: ""
+  image:
+    repository: redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
+  auth:
+    password: ""
+  keyPrefix: tdai_memory_v2
+  consumerGroup: tdai_pipeline
+  service:
+    port: 6379
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 2Gi
+    accessMode: ReadWriteOnce
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+postgres:
+  deploy: true
+  image:
+    repository: pgvector/pgvector
+    tag: pg16
+    pullPolicy: IfNotPresent
+  auth:
+    username: memory
+    password: memory
+    database: memory
+  # Used when deploy=false (external Postgres).
+  url: ""
+  service:
+    port: 5432
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+    accessMode: ReadWriteOnce
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+
+minio:
+  # standalone default: local disk under core PVC. Set true to opt in STORAGE_BACKEND=s3.
+  deploy: false
+  image:
+    repository: minio/minio
+    tag: latest
+    pullPolicy: IfNotPresent
+  mcImage:
+    repository: minio/mc
+    tag: latest
+    pullPolicy: IfNotPresent
+  auth:
+    rootUser: minioadmin
+    rootPassword: minioadmin
+  bucket: tdai-memory
+  # Used when deploy=false (external S3/MinIO).
+  endpoint: ""
+  forcePathStyle: true
+  region: us-east-1
+  service:
+    apiPort: 9000
+    consolePort: 9001
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+    accessMode: ReadWriteOnce
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi

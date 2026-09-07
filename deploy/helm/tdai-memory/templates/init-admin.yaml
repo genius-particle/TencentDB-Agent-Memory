@@ -1,0 +1,83 @@
+{{- if .Values.initAdmin.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "tdai-memory.fullname" . }}-init-admin
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: init-admin
+  annotations:
+    helm.sh/hook: post-install,post-upgrade
+    helm.sh/hook-weight: "10"
+    helm.sh/hook-delete-policy: before-hook-creation,hook-succeeded
+spec:
+  backoffLimit: 10
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: init-admin
+    spec:
+      restartPolicy: OnFailure
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: init-admin
+          image: {{ include "tdai-memory.image.core" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              echo "waiting for memory-core..."
+              i=0
+              until curl -fsS "{{ include "tdai-memory.coreUrl" . }}/health" >/dev/null 2>&1; do
+                i=$((i+1))
+                if [ "$i" -gt 120 ]; then
+                  echo "timeout waiting for memory-core" >&2
+                  exit 1
+                fi
+                sleep 2
+              done
+              body=$(printf '{"username":"%s","user_key":"%s"}' "$ADMIN_USERNAME" "$ADMIN_USER_KEY")
+              code=$(curl -sS -o /tmp/init-admin.out -w "%{http_code}" \
+                -X POST -H "Content-Type: application/json" \
+                -H "x-tdai-service-id: default" \
+                "{{ include "tdai-memory.coreUrl" . }}/v3/internal/meta/user/init-admin" \
+                -d "$body" || echo 000)
+              echo "init-admin HTTP=$code"
+              cat /tmp/init-admin.out 2>/dev/null || true
+              echo
+              case "$code" in
+                200|409) ;;
+                *) exit 1 ;;
+              esac
+              vcode=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 \
+                -X POST -H "Content-Type: application/json" \
+                -H "x-tdai-service-id: default" \
+                "{{ include "tdai-memory.coreUrl" . }}/v3/meta/auth/verify" \
+                -d "$(printf '{"user_key":"%s"}' "$ADMIN_USER_KEY")")
+              echo "auth/verify HTTP=$vcode"
+              [ "$vcode" = "200" ]
+          env:
+            - name: ADMIN_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: ADMIN_USERNAME
+            - name: ADMIN_USER_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: ADMIN_USER_KEY
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 200m
+              memory: 128Mi
+{{- end }}

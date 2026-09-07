@@ -1,0 +1,20 @@
+# Overlay: SQLite standalone, same shape as the pre-merge k3s-single manifest.
+# Does not deploy Postgres or Redis. Blobs stay local disk. State stays LocalStateBackend.
+#
+#   helm install tdai-memory deploy/helm/tdai-memory -n tdai-memory --create-namespace \
+#     -f deploy/helm/tdai-memory/values-sqlite.yaml
+#
+# GHCR images still have metadata SQLite DELETE-journal + getUserByKey fsync
+# (the WAL patch lives only on the 1.0.1 k3s overlay, not in this fork's source).
+# Prefer the default postgres values on HDD hosts.
+
+store:
+  mode: sqlite
+
+stateBackend: local
+
+postgres:
+  deploy: false
+
+redis:
+  deploy: false

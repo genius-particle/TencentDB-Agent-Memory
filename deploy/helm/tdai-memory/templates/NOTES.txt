@@ -1,0 +1,37 @@
+1. Chart: {{ .Chart.Name }}-{{ .Chart.Version }}  (app {{ .Chart.AppVersion }})
+   Store: {{ .Values.store.mode }}   deployMode: standalone (never service)
+
+2. Fill LLM / proxy / embedding keys before a real install:
+
+     --set llm.baseUrl=... --set llm.apiKey=... --set llm.model=...
+     --set proxy.upstream.url=... --set proxy.upstream.apiKey=... --set proxy.upstream.model=...
+     --set embedding.apiKey=... --set ingress.host=tdai.example.com
+     --set public.host=<node-ip>
+
+{{- if eq .Values.store.mode "postgres" }}
+3. Open stack: Postgres+pgvector memory + Postgres metadata + Redis state; blobs on core PVC
+   (STORAGE_BACKEND unset). STATE_BACKEND={{ .Values.stateBackend }}. MinIO only if minio.deploy=true.
+{{- else }}
+3. SQLite standalone (k3s-single shape). STATE_BACKEND={{ .Values.stateBackend }}.
+   Metadata SQLite in the GHCR image still uses DELETE journal; HDD hosts should prefer the default postgres values.
+{{- end }}
+
+4. After pods are Ready:
+
+     kubectl -n {{ .Release.Namespace }} get pods,svc,ingress
+     curl -sS {{ include "tdai-memory.coreUrl" . }}/health
+
+{{- if .Values.ingress.host }}
+   Panel: http://{{ .Values.ingress.host }}/
+{{- end }}
+{{- if eq .Values.proxy.service.type "NodePort" }}
+   Proxy NodePort: {{ .Values.proxy.service.nodePort }}
+{{- end }}
+
+   Panel login user_key: Secret {{ include "tdai-memory.secretName" . }} key ADMIN_USER_KEY
+   (default {{ .Values.admin.userKey }})
+
+5. Claude Code:
+
+     export ANTHROPIC_BASE_URL={{ include "tdai-memory.public.proxyUrl" . }}/claude-code/default
+     export ANTHROPIC_AUTH_TOKEN='<ADMIN_USER_KEY>'

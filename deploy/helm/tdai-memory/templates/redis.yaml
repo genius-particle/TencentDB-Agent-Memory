@@ -1,0 +1,110 @@
+{{- if .Values.redis.deploy }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tdai-memory.redis.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tdai-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: redis
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: redis
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: redis
+          image: {{ printf "%s:%s" .Values.redis.image.repository .Values.redis.image.tag | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          ports:
+            - name: redis
+              containerPort: 6379
+          {{- if .Values.redis.auth.password }}
+          command:
+            - redis-server
+            - --requirepass
+            - $(REDIS_PASSWORD)
+            - --appendonly
+            - "yes"
+          env:
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: REDIS_PASSWORD
+          {{- else }}
+          command: ["redis-server", "--appendonly", "yes"]
+          {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["redis-cli", "ping"]
+            periodSeconds: 20
+            timeoutSeconds: 3
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.redis.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.redis.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tdai-memory.redis.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tdai-memory.redis.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "tdai-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+  ports:
+    - name: redis
+      port: {{ .Values.redis.service.port }}
+      targetPort: redis
+{{- if .Values.redis.persistence.enabled }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "tdai-memory.redis.fullname" . }}-data
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: redis
+spec:
+  accessModes:
+    - {{ .Values.redis.persistence.accessMode }}
+  resources:
+    requests:
+      storage: {{ .Values.redis.persistence.size }}
+  {{- if .Values.redis.persistence.storageClass }}
+  storageClassName: {{ .Values.redis.persistence.storageClass | quote }}
+  {{- end }}
+{{- end }}
+{{- end }}

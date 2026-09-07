@@ -1,0 +1,98 @@
+{{- if .Values.minio.deploy }}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tdai-memory.minio.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tdai-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: minio
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: minio
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: minio
+          image: {{ printf "%s:%s" .Values.minio.image.repository .Values.minio.image.tag | quote }}
+          imagePullPolicy: {{ .Values.minio.image.pullPolicy }}
+          args:
+            - server
+            - /data
+            - --console-address
+            - ":9001"
+          ports:
+            - name: api
+              containerPort: 9000
+            - name: console
+              containerPort: 9001
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: api
+            periodSeconds: 5
+            timeoutSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /minio/health/live
+              port: api
+            periodSeconds: 20
+            timeoutSeconds: 5
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.minio.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.minio.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tdai-memory.minio.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tdai-memory.minio.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "tdai-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: minio
+  ports:
+    - name: api
+      port: {{ .Values.minio.service.apiPort }}
+      targetPort: api
+    - name: console
+      port: {{ .Values.minio.service.consolePort }}
+      targetPort: console
+{{- end }}

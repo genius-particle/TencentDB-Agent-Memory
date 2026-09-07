@@ -1,0 +1,147 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tdai-memory.hub.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-hub
+spec:
+  replicas: {{ .Values.hub.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tdai-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: memory-hub
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: memory-hub
+      annotations:
+        checksum/public: {{ include (print $.Template.BasePath "/configmap-public.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      containers:
+        - name: memory-hub
+          image: {{ include "tdai-memory.image.hub" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: panel
+              containerPort: 8125
+            - name: knowledge
+              containerPort: 8424
+          env:
+            - name: PANEL_PORT
+              value: "8125"
+            - name: KNOWLEDGE_PORT
+              value: "8424"
+            - name: KNOWLEDGE_DATA_DIR
+              value: /data/knowledge
+            - name: REMOTE_INSTANCE_ID
+              value: default
+            - name: REMOTE_INSTANCE_NAME
+              value: default
+            - name: REMOTE_INSTANCE_URL
+              value: {{ include "tdai-memory.coreUrl" . | quote }}
+            - name: REMOTE_INSTANCE_KEY
+              value: {{ default "local" .Values.gatewayApiKey | quote }}
+            - name: REMOTE_INSTANCE_PROXY_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "tdai-memory.fullname" . }}-public-urls
+                  key: MEMORY_HUB_PROXY_PUBLIC_URL
+            - name: KNOWLEDGE_PUBLIC_BASE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ include "tdai-memory.fullname" . }}-public-urls
+                  key: KNOWLEDGE_PUBLIC_BASE_URL
+            - name: LLM_MODE
+              value: custom
+            - name: LLM_PROTOCOL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_PROTOCOL
+            - name: LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_API_KEY
+            - name: LLM_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_BASE_URL
+            - name: LLM_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_MODEL
+            - name: KNOWLEDGE_LLM_BINDING_SYNC
+              value: "0"
+            - name: TMC_CALLBACK_URL
+              value: http://127.0.0.1:8125
+          volumeMounts:
+            - name: data
+              mountPath: /data/knowledge
+          startupProbe:
+            httpGet:
+              path: /health
+              port: panel
+            periodSeconds: 5
+            timeoutSeconds: 8
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: panel
+            periodSeconds: 10
+            timeoutSeconds: 8
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: panel
+            periodSeconds: 20
+            timeoutSeconds: 8
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.hub.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.hub.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tdai-memory.hub.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tdai-memory.hub.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-hub
+spec:
+  type: {{ .Values.hub.service.type }}
+  selector:
+    {{- include "tdai-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-hub
+  ports:
+    - name: panel
+      port: {{ .Values.hub.service.panelPort }}
+      targetPort: panel
+      {{- if and (eq .Values.hub.service.type "NodePort") .Values.hub.service.panelNodePort }}
+      nodePort: {{ .Values.hub.service.panelNodePort }}
+      {{- end }}
+    - name: knowledge
+      port: {{ .Values.hub.service.knowledgePort }}
+      targetPort: knowledge
+      {{- if and (eq .Values.hub.service.type "NodePort") .Values.hub.service.knowledgeNodePort }}
+      nodePort: {{ .Values.hub.service.knowledgeNodePort }}
+      {{- end }}

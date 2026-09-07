@@ -1,0 +1,123 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tdai-memory.proxy.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-proxy
+spec:
+  replicas: {{ .Values.proxy.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tdai-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: memory-proxy
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: memory-proxy
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-proxy.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        fsGroup: 10001
+      initContainers:
+        - name: render-config
+          image: {{ include "tdai-memory.image.core" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - |
+              set -eu
+              sed \
+                -e "s|__PROXY_UPSTREAM_URL__|${PROXY_UPSTREAM_URL}|g" \
+                -e "s|__PROXY_UPSTREAM_API_KEY__|${PROXY_UPSTREAM_API_KEY}|g" \
+                /tmpl/config.yaml.tmpl > /out/config.yaml
+          env:
+            - name: PROXY_UPSTREAM_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: PROXY_UPSTREAM_URL
+            - name: PROXY_UPSTREAM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: PROXY_UPSTREAM_API_KEY
+          volumeMounts:
+            - name: tmpl
+              mountPath: /tmpl
+              readOnly: true
+            - name: rendered
+              mountPath: /out
+      containers:
+        - name: memory-proxy
+          image: {{ include "tdai-memory.image.proxy" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8096
+          env:
+            - name: PROXY_DB_PATH
+              value: /data/proxy.db
+          volumeMounts:
+            - name: rendered
+              mountPath: /data
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 24
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.proxy.resources | nindent 12 }}
+      volumes:
+        - name: tmpl
+          configMap:
+            name: {{ include "tdai-memory.fullname" . }}-proxy-config
+        - name: rendered
+          {{- if .Values.proxy.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tdai-memory.proxy.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tdai-memory.proxy.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-proxy
+spec:
+  type: {{ .Values.proxy.service.type }}
+  selector:
+    {{- include "tdai-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-proxy
+  ports:
+    - name: http
+      port: {{ .Values.proxy.service.port }}
+      targetPort: http
+      {{- if and (eq .Values.proxy.service.type "NodePort") .Values.proxy.service.nodePort }}
+      nodePort: {{ .Values.proxy.service.nodePort }}
+      {{- end }}

@@ -1,0 +1,262 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "tdai-memory.core.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-core
+spec:
+  replicas: {{ .Values.core.replicaCount }}
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "tdai-memory.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: memory-core
+  template:
+    metadata:
+      labels:
+        {{- include "tdai-memory.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: memory-core
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap-core.yaml") . | sha256sum }}
+        checksum/secret: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- if or .Values.redis.deploy (and (eq .Values.store.mode "postgres") .Values.postgres.deploy) .Values.minio.deploy }}
+      initContainers:
+        {{- if .Values.redis.deploy }}
+        - name: wait-redis
+          image: {{ printf "%s:%s" .Values.redis.image.repository .Values.redis.image.tag | quote }}
+          imagePullPolicy: {{ .Values.redis.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - until redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" ping | grep -q PONG; do sleep 2; done
+          env:
+            - name: REDIS_HOST
+              value: {{ include "tdai-memory.redis.fullname" . | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.service.port | quote }}
+        {{- end }}
+        {{- if and (eq .Values.store.mode "postgres") .Values.postgres.deploy }}
+        - name: wait-postgres
+          image: {{ printf "%s:%s" .Values.postgres.image.repository .Values.postgres.image.tag | quote }}
+          imagePullPolicy: {{ .Values.postgres.image.pullPolicy }}
+          command:
+            - sh
+            - -c
+            - until pg_isready -h "$PGHOST" -p "$PGPORT" -U "$PGUSER" -d "$PGDATABASE"; do sleep 2; done
+          env:
+            - name: PGHOST
+              value: {{ include "tdai-memory.postgres.fullname" . | quote }}
+            - name: PGPORT
+              value: {{ .Values.postgres.service.port | quote }}
+            - name: PGUSER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: POSTGRES_USER
+            - name: PGDATABASE
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: POSTGRES_DB
+        {{- end }}
+        {{- if .Values.minio.deploy }}
+        - name: init-minio-bucket
+          image: {{ printf "%s:%s" .Values.minio.mcImage.repository .Values.minio.mcImage.tag | quote }}
+          imagePullPolicy: {{ .Values.minio.mcImage.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -eu
+              until mc alias set local "$S3_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD"; do sleep 2; done
+              mc mb -p "local/$S3_BUCKET" || true
+          env:
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_ENDPOINT
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_BUCKET
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MINIO_ROOT_USER
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MINIO_ROOT_PASSWORD
+        {{- end }}
+      {{- end }}
+      containers:
+        - name: memory-core
+          image: {{ include "tdai-memory.image.core" . | quote }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          ports:
+            - name: http
+              containerPort: 8420
+          env:
+            - name: TDAI_GATEWAY_CONFIG
+              value: /data/config/tdai-gateway.yaml
+            - name: TDAI_GATEWAY_HOST
+              value: "0.0.0.0"
+            - name: TDAI_GATEWAY_PORT
+              value: "8420"
+            - name: TDAI_DATA_DIR
+              value: /data/tdai-memory
+            - name: TDAI_DEPLOY_MODE
+              value: standalone
+            - name: STATE_BACKEND
+              value: {{ .Values.stateBackend | quote }}
+            {{- if eq (include "tdai-memory.useRedisState" .) "yes" }}
+            - name: REDIS_HOST
+              value: {{ include "tdai-memory.redisHost" . | quote }}
+            - name: REDIS_PORT
+              value: {{ .Values.redis.service.port | quote }}
+            - name: REDIS_KEY_PREFIX
+              value: {{ .Values.redis.keyPrefix | quote }}
+            {{- if .Values.redis.auth.password }}
+            - name: REDIS_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: REDIS_PASSWORD
+            {{- end }}
+            {{- end }}
+            - name: TDAI_GATEWAY_API_KEY
+              value: {{ .Values.gatewayApiKey | quote }}
+            - name: TDAI_LLM_BASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_BASE_URL
+            - name: TDAI_LLM_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_API_KEY
+            - name: TDAI_LLM_MODEL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: MEMORY_LLM_MODEL
+            - name: EMBEDDING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: EMBEDDING_API_KEY
+                  optional: true
+            - name: SCANNER_INTERVAL_MS
+              value: {{ .Values.scanner.intervalMs | quote }}
+            {{- if eq .Values.store.mode "postgres" }}
+            - name: STORE_MODE
+              value: postgres
+            - name: TDAI_METADATA_BACKEND
+              value: postgres
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: DATABASE_URL
+            - name: TDAI_METADATA_POSTGRES_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: TDAI_METADATA_POSTGRES_URL
+            {{- end }}
+            {{- if or .Values.minio.deploy .Values.minio.endpoint }}
+            - name: STORAGE_BACKEND
+              value: s3
+            - name: S3_FORCE_PATH_STYLE
+              value: {{ .Values.minio.forcePathStyle | quote }}
+            - name: S3_REGION
+              value: {{ .Values.minio.region | quote }}
+            - name: S3_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_ENDPOINT
+            - name: S3_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_ACCESS_KEY
+            - name: S3_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_SECRET_KEY
+            - name: S3_BUCKET
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "tdai-memory.secretName" . }}
+                  key: S3_BUCKET
+            {{- end }}
+          volumeMounts:
+            - name: data
+              mountPath: /data/tdai-memory
+            - name: config
+              mountPath: /data/config
+              readOnly: true
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            failureThreshold: 36
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 20
+            failureThreshold: 6
+          resources:
+            {{- toYaml .Values.core.resources | nindent 12 }}
+      volumes:
+        - name: data
+          {{- if .Values.core.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "tdai-memory.core.fullname" . }}-data
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: config
+          configMap:
+            name: {{ include "tdai-memory.fullname" . }}-core-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "tdai-memory.core.fullname" . }}
+  labels:
+    {{- include "tdai-memory.labels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-core
+spec:
+  type: {{ .Values.core.service.type }}
+  selector:
+    {{- include "tdai-memory.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: memory-core
+  ports:
+    - name: http
+      port: {{ .Values.core.service.port }}
+      targetPort: http
+      {{- if and (eq .Values.core.service.type "NodePort") .Values.core.service.nodePort }}
+      nodePort: {{ .Values.core.service.nodePort }}
+      {{- end }}
