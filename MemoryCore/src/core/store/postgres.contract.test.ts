@@ -54,9 +54,9 @@ describe.skipIf(!hasPostgres)("IMemoryStore contract: postgres", () => {
     expect(caps.clearMemoryContent).toBe(true);
     expect(caps.deferredEmbedding).toBe(true);
     expect(caps.entities).toBe(false);
-    expect(caps.knowledge).toBe(false);
-    expect(caps.prompts).toBe(false);
-    expect(caps.generationRefs).toBe(false);
+    expect(caps.knowledge).toBe(true);
+    expect(caps.prompts).toBe(true);
+    expect(caps.generationRefs).toBe(true);
     expect(caps.sparseVectors).toBe(true);
     expect(caps.ftsSearch).toBe(true);
     expect(caps.nativeHybridSearch).toBe(false);

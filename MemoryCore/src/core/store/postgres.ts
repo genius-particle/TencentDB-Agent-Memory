@@ -7,7 +7,7 @@
  * No new TCVDB behavior.
  *
  * Capability flags are honest: profiles/pagination/audit/clear/deferredEmbedding
- * are implemented; entities/knowledge/prompts/generationRefs are not (Phase 3).
+ * and knowledge/prompts/generationRefs are implemented; entities is not (metadata store).
  *
  * Fault-tolerance matches IMemoryStore: most methods return empty/false on
  * error rather than throwing (except clearMemoryContent team+agent guard).
@@ -45,7 +45,20 @@ import type {
   ProfileRecord,
   ProfileSyncRecord,
   ProfileCountFilter,
+  KnowledgeEntity,
+  KnowledgeType,
+  KnowledgeListResult,
+  BatchDeleteResult,
 } from "./types.js";
+import type {
+  MemoryPromptRecord,
+  MemoryPromptListFilter,
+} from "../memory-prompt/types.js";
+import {
+  buildMemoryGenerationRefId,
+  type MemoryGenerationLayer,
+  type MemoryGenerationRefRecord,
+} from "../memory-generation-log/types.js";
 import { DEFAULT_ISOLATION_ID, rowMatchesIsolation } from "./types.js";
 import {
   DEFAULT_SPARSE_DIMENSIONS,
@@ -228,6 +241,73 @@ export class PostgresMemoryStore implements IMemoryStore {
         await client.query("CREATE INDEX IF NOT EXISTS idx_pg_l1_team_agent ON l1_records(team_id, agent_id, updated_time)");
         await client.query("CREATE INDEX IF NOT EXISTS idx_pg_profiles_team_agent ON profiles(team_id, agent_id)");
         await client.query("CREATE INDEX IF NOT EXISTS idx_pg_audit_record ON memory_audit(record_id, updated_at_ms)");
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS entity_knowledge (
+            knowledge_id TEXT PRIMARY KEY,
+            type TEXT NOT NULL,
+            service_url TEXT NOT NULL,
+            name TEXT NOT NULL,
+            summary TEXT,
+            team_id TEXT NOT NULL,
+            agent_id TEXT NOT NULL DEFAULT '',
+            user_id TEXT,
+            repo_url TEXT,
+            branch TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+          )
+        `);
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS idx_pg_entity_knowledge_team
+            ON entity_knowledge(team_id)
+        `);
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS idx_pg_entity_knowledge_team_type
+            ON entity_knowledge(team_id, type)
+        `);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS memory_prompts (
+            memory_prompt_id TEXT PRIMARY KEY,
+            name TEXT NOT NULL,
+            layer TEXT NOT NULL CHECK (layer IN ('l1','l2','l3')),
+            prompt TEXT NOT NULL,
+            version INTEGER NOT NULL,
+            status TEXT NOT NULL CHECK (status IN ('active','deleting')),
+            created_by TEXT,
+            updated_by TEXT,
+            created_at_ms BIGINT NOT NULL,
+            updated_at_ms BIGINT NOT NULL
+          )
+        `);
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS idx_pg_memory_prompts_layer_updated
+            ON memory_prompts(layer, updated_at_ms)
+        `);
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS idx_pg_memory_prompts_status
+            ON memory_prompts(status)
+        `);
+
+        await client.query(`
+          CREATE TABLE IF NOT EXISTS memory_generation_refs (
+            generation_ref_id TEXT PRIMARY KEY,
+            layer TEXT NOT NULL CHECK (layer IN ('l1','l2','l3')),
+            memory_id TEXT NOT NULL,
+            generation_id TEXT NOT NULL,
+            generation_log_id TEXT NOT NULL,
+            generation_log_key TEXT NOT NULL,
+            memory_prompt_id TEXT NOT NULL,
+            memory_prompt_version INTEGER NOT NULL,
+            memory_prompt_source TEXT NOT NULL,
+            created_at_ms BIGINT NOT NULL
+          )
+        `);
+        await client.query(`
+          CREATE INDEX IF NOT EXISTS idx_pg_memory_generation_refs_memory
+            ON memory_generation_refs(layer, memory_id)
+        `);
       });
       this.degraded = false;
       this.logger?.debug?.(`${TAG} Initialized schema=${this.schema} dimensions=${this.dimensions}`);
@@ -257,9 +337,9 @@ export class PostgresMemoryStore implements IMemoryStore {
       profiles: true,
       entities: false,
       audit: true,
-      prompts: false,
-      generationRefs: false,
-      knowledge: false,
+      prompts: true,
+      generationRefs: true,
+      knowledge: true,
       pagination: true,
       clearMemoryContent: true,
       deferredEmbedding: true,
@@ -1304,5 +1384,377 @@ export class PostgresMemoryStore implements IMemoryStore {
       createdAtMs: num(r.created_at_ms),
       updatedAtMs: num(r.updated_at_ms),
     };
+  }
+
+  // ── Knowledge entity ─────────────────────────────────────
+
+  private knowledgeFromRow(row: Record<string, unknown>): KnowledgeEntity {
+    return {
+      knowledge_id: str(row.knowledge_id),
+      type: (str(row.type) as KnowledgeType) || "wiki",
+      service_url: str(row.service_url),
+      name: str(row.name),
+      summary: row.summary == null ? null : String(row.summary),
+      team_id: str(row.team_id),
+      agent_id: str(row.agent_id),
+      user_id: row.user_id == null ? null : String(row.user_id),
+      repo_url: row.repo_url == null ? undefined : String(row.repo_url),
+      branch: row.branch == null ? undefined : String(row.branch),
+      created_at: str(row.created_at),
+      updated_at: str(row.updated_at),
+    };
+  }
+
+  async createKnowledge(input: Omit<KnowledgeEntity, "created_at" | "updated_at">): Promise<KnowledgeEntity> {
+    if (this.degraded) throw new Error("PostgresMemoryStore degraded");
+    const now = new Date().toISOString();
+    await this.withClient(async (client) => {
+      const existing = await client.query(
+        "SELECT created_at FROM entity_knowledge WHERE knowledge_id=$1",
+        [input.knowledge_id],
+      );
+      const createdAt = existing.rows[0]?.created_at
+        ? String(existing.rows[0].created_at)
+        : now;
+      await client.query(
+        `INSERT INTO entity_knowledge (
+          knowledge_id, type, service_url, name, summary, team_id, agent_id,
+          user_id, repo_url, branch, created_at, updated_at
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT (knowledge_id) DO UPDATE SET
+          type=EXCLUDED.type,
+          service_url=EXCLUDED.service_url,
+          name=EXCLUDED.name,
+          summary=EXCLUDED.summary,
+          team_id=EXCLUDED.team_id,
+          agent_id=EXCLUDED.agent_id,
+          user_id=EXCLUDED.user_id,
+          repo_url=EXCLUDED.repo_url,
+          branch=EXCLUDED.branch,
+          updated_at=EXCLUDED.updated_at`,
+        [
+          input.knowledge_id,
+          input.type,
+          input.service_url,
+          input.name,
+          input.summary ?? null,
+          input.team_id,
+          input.agent_id ?? "",
+          input.user_id ?? null,
+          input.repo_url ?? null,
+          input.branch ?? null,
+          createdAt,
+          now,
+        ],
+      );
+    });
+    const got = await this.getKnowledge(input.knowledge_id);
+    if (!got) throw new Error("createKnowledge failed");
+    return got;
+  }
+
+  async getKnowledge(knowledgeId: string): Promise<KnowledgeEntity | null> {
+    if (this.degraded) return null;
+    try {
+      return await this.withClient(async (client) => {
+        const r = await client.query(
+          "SELECT * FROM entity_knowledge WHERE knowledge_id=$1",
+          [knowledgeId],
+        );
+        const row = r.rows[0];
+        return row ? this.knowledgeFromRow(row) : null;
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} getKnowledge failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  async updateKnowledge(
+    knowledgeId: string,
+    patch: Partial<Pick<KnowledgeEntity, "name" | "summary" | "service_url" | "repo_url" | "branch">>,
+  ): Promise<KnowledgeEntity | null> {
+    const current = await this.getKnowledge(knowledgeId);
+    if (!current) return null;
+    return this.createKnowledge({
+      knowledge_id: current.knowledge_id,
+      type: current.type,
+      service_url: patch.service_url ?? current.service_url,
+      name: patch.name ?? current.name,
+      summary: patch.summary !== undefined ? patch.summary : current.summary,
+      team_id: current.team_id,
+      agent_id: current.agent_id ?? "",
+      user_id: current.user_id,
+      repo_url: patch.repo_url !== undefined ? patch.repo_url : current.repo_url,
+      branch: patch.branch !== undefined ? patch.branch : current.branch,
+    });
+  }
+
+  async deleteKnowledge(knowledgeIds: string[], teamId?: string): Promise<BatchDeleteResult> {
+    const result: BatchDeleteResult = { deleted_ids: [], failed: [] };
+    if (this.degraded) {
+      for (const id of knowledgeIds) result.failed.push({ id, reason: "degraded" });
+      return result;
+    }
+    for (const id of knowledgeIds) {
+      const row = await this.getKnowledge(id);
+      if (!row) {
+        result.failed.push({ id, reason: "not_found" });
+        continue;
+      }
+      if (teamId && row.team_id !== teamId) {
+        result.failed.push({ id, reason: "team_mismatch" });
+        continue;
+      }
+      try {
+        await this.withClient(async (client) => {
+          await client.query("DELETE FROM entity_knowledge WHERE knowledge_id=$1", [id]);
+        });
+        result.deleted_ids.push(id);
+      } catch {
+        result.failed.push({ id, reason: "delete_failed" });
+      }
+    }
+    return result;
+  }
+
+  async listKnowledge(input: {
+    team_id: string;
+    type?: KnowledgeType;
+    knowledge_ids?: string[];
+    limit?: number;
+    offset?: number;
+  }): Promise<KnowledgeListResult> {
+    if (this.degraded) return { items: [], total: 0 };
+    const limit = Math.min(Math.max(input.limit ?? 20, 1), 1000);
+    const offset = Math.max(input.offset ?? 0, 0);
+    const ids = input.knowledge_ids;
+    if (ids && ids.length === 0) return { items: [], total: 0 };
+
+    try {
+      return await this.withClient(async (client) => {
+        const where: string[] = ["team_id=$1"];
+        const args: unknown[] = [input.team_id];
+        let idx = 2;
+        if (input.type) {
+          where.push(`type=$${idx++}`);
+          args.push(input.type);
+        }
+        if (ids && ids.length > 0) {
+          where.push(`knowledge_id = ANY($${idx++}::text[])`);
+          args.push(ids);
+        }
+        const whereSql = where.join(" AND ");
+        const countR = await client.query(
+          `SELECT COUNT(*)::int AS total FROM entity_knowledge WHERE ${whereSql}`,
+          args,
+        );
+        const rowsR = await client.query(
+          `SELECT * FROM entity_knowledge WHERE ${whereSql}
+           ORDER BY updated_at DESC LIMIT $${idx} OFFSET $${idx + 1}`,
+          [...args, limit, offset],
+        );
+        return {
+          items: rowsR.rows.map((r) => this.knowledgeFromRow(r)),
+          total: Number(countR.rows[0]?.total ?? 0),
+        };
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} listKnowledge failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return { items: [], total: 0 };
+    }
+  }
+
+  // ── Memory prompts ───────────────────────────────────────
+
+  async createMemoryPrompt(record: MemoryPromptRecord): Promise<MemoryPromptRecord> {
+    if (this.degraded) throw new Error("PostgresMemoryStore degraded");
+    await this.withClient(async (client) => {
+      await client.query(
+        `INSERT INTO memory_prompts (
+          memory_prompt_id, name, layer, prompt, version, status,
+          created_by, updated_by, created_at_ms, updated_at_ms
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [
+          record.memory_prompt_id,
+          record.name,
+          record.layer,
+          record.prompt,
+          record.version,
+          record.status,
+          record.created_by ?? null,
+          record.updated_by ?? null,
+          record.created_at_ms,
+          record.updated_at_ms,
+        ],
+      );
+    });
+    return record;
+  }
+
+  async getMemoryPrompts(ids: string[]): Promise<MemoryPromptRecord[]> {
+    if (this.degraded || ids.length === 0) return [];
+    try {
+      return await this.withClient(async (client) => {
+        const r = await client.query(
+          "SELECT * FROM memory_prompts WHERE memory_prompt_id = ANY($1::text[])",
+          [ids],
+        );
+        return r.rows as MemoryPromptRecord[];
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} getMemoryPrompts failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  async listMemoryPrompts(filter: MemoryPromptListFilter): Promise<MemoryPromptRecord[]> {
+    if (this.degraded) return [];
+    const conds = ["status = 'active'"];
+    const args: unknown[] = [];
+    let idx = 1;
+    if (filter.layer) {
+      conds.push(`layer = $${idx++}`);
+      args.push(filter.layer);
+    }
+    const order = filter.timeOrder === "asc" ? "ASC" : "DESC";
+    const limit = Math.min(Math.max(filter.limit ?? 20, 1), 100);
+    const offset = Math.max(filter.offset ?? 0, 0);
+    try {
+      return await this.withClient(async (client) => {
+        const r = await client.query(
+          `SELECT * FROM memory_prompts
+           WHERE ${conds.join(" AND ")}
+           ORDER BY updated_at_ms ${order}, memory_prompt_id ${order}
+           LIMIT $${idx} OFFSET $${idx + 1}`,
+          [...args, limit, offset],
+        );
+        return r.rows as MemoryPromptRecord[];
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} listMemoryPrompts failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return [];
+    }
+  }
+
+  async updateMemoryPrompt(
+    id: string,
+    patch: { name?: string; prompt?: string; updated_by?: string; updated_at_ms: number },
+  ): Promise<MemoryPromptRecord | null> {
+    const current = (await this.getMemoryPrompts([id]))[0];
+    if (!current || current.status !== "active") return null;
+    const sameName = patch.name === undefined || patch.name === current.name;
+    const samePrompt = patch.prompt === undefined || patch.prompt === current.prompt;
+    if (sameName && samePrompt) return current;
+
+    try {
+      await this.withClient(async (client) => {
+        const sets = ["version = version + 1", "updated_at_ms = $1", "updated_by = $2"];
+        const args: unknown[] = [patch.updated_at_ms, patch.updated_by ?? null];
+        let idx = 3;
+        if (patch.name !== undefined) {
+          sets.push(`name = $${idx++}`);
+          args.push(patch.name);
+        }
+        if (patch.prompt !== undefined) {
+          sets.push(`prompt = $${idx++}`);
+          args.push(patch.prompt);
+        }
+        args.push(id);
+        await client.query(
+          `UPDATE memory_prompts SET ${sets.join(", ")}
+           WHERE memory_prompt_id = $${idx} AND status = 'active'`,
+          args,
+        );
+      });
+      return (await this.getMemoryPrompts([id]))[0] ?? null;
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} updateMemoryPrompt failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  // ── Memory generation refs ───────────────────────────────
+
+  async upsertMemoryGenerationRefs(records: MemoryGenerationRefRecord[]): Promise<void> {
+    if (this.degraded || records.length === 0) return;
+    try {
+      await this.withClient(async (client) => {
+        await client.query("BEGIN");
+        try {
+          for (const record of records) {
+            await client.query(
+              `INSERT INTO memory_generation_refs (
+                generation_ref_id, layer, memory_id, generation_id, generation_log_id,
+                generation_log_key, memory_prompt_id, memory_prompt_version,
+                memory_prompt_source, created_at_ms
+              ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+              ON CONFLICT (generation_ref_id) DO UPDATE SET
+                memory_id=EXCLUDED.memory_id,
+                generation_id=EXCLUDED.generation_id,
+                generation_log_id=EXCLUDED.generation_log_id,
+                generation_log_key=EXCLUDED.generation_log_key,
+                memory_prompt_id=EXCLUDED.memory_prompt_id,
+                memory_prompt_version=EXCLUDED.memory_prompt_version,
+                memory_prompt_source=EXCLUDED.memory_prompt_source,
+                created_at_ms=EXCLUDED.created_at_ms`,
+              [
+                record.generation_ref_id,
+                record.layer,
+                record.memory_id,
+                record.generation_id,
+                record.generation_log_id,
+                record.generation_log_key,
+                record.memory_prompt_id,
+                record.memory_prompt_version,
+                record.memory_prompt_source,
+                record.created_at_ms,
+              ],
+            );
+          }
+          await client.query("COMMIT");
+        } catch (err) {
+          await client.query("ROLLBACK");
+          throw err;
+        }
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} upsertMemoryGenerationRefs failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+  }
+
+  async getMemoryGenerationRef(
+    layer: MemoryGenerationLayer,
+    memoryId: string,
+  ): Promise<MemoryGenerationRefRecord | null> {
+    if (this.degraded) return null;
+    const id = buildMemoryGenerationRefId(layer, memoryId);
+    try {
+      return await this.withClient(async (client) => {
+        const r = await client.query(
+          `SELECT * FROM memory_generation_refs
+           WHERE generation_ref_id=$1 AND layer=$2 AND memory_id=$3`,
+          [id, layer, memoryId],
+        );
+        return (r.rows[0] as MemoryGenerationRefRecord | undefined) ?? null;
+      });
+    } catch (err) {
+      this.logger?.warn?.(
+        `${TAG} getMemoryGenerationRef failed: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
   }
 }

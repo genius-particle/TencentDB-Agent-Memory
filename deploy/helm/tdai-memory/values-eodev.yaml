@@ -1,12 +1,19 @@
 # 192.168.11.170 k3s — fork chart beside official namespace tdai-memory.
 # Official keeps NodePort 30420/30125/30424/30096 and host tdai.192.168.11.170.nip.io.
 #
+# Images: GHCR 三件套（先试直连；拉不下来再改青岛仓 mirror）+ 青岛仓 Redis.
+# Stack: Postgres(ParadeDB) + Redis state + STATE_BACKEND=redis.
+#
 #   helm upgrade --install tdai-open deploy/helm/tdai-memory \
 #     -n tdai-open --create-namespace \
 #     -f deploy/helm/tdai-memory/values-eodev.yaml \
 #     --set llm.apiKey=... --set proxy.upstream.apiKey=... --set embedding.apiKey=...
+#
+# Pin immutable build: --set image.tag=c020f22
 
 fullnameOverride: tdai-open
+
+stateBackend: redis
 
 llm:
   baseUrl: https://apihub.agnes-ai.com/v1
@@ -21,9 +28,10 @@ proxy:
     type: NodePort
     nodePort: 31096
 
+# 三件套：青岛仓 mirror（tag=c020f22，含 Redis 状态后端）
 image:
   registry: registry.cn-qingdao.aliyuncs.com/eo
-  tag: feat-server-team
+  tag: c020f22
   pullPolicy: IfNotPresent
   core:
     repository: ghcr.io.genius-particle.tencentdb-agent-memory.memory-core
@@ -69,6 +77,11 @@ postgres:
     size: 5Gi
 
 redis:
+  deploy: true
+  image:
+    repository: registry.cn-qingdao.aliyuncs.com/eo/redis
+    tag: 7-alpine
+    pullPolicy: IfNotPresent
   persistence:
     storageClass: local-path
     size: 2Gi

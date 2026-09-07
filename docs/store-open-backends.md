@@ -38,9 +38,10 @@ Honest capability flags:
 | `deferredEmbedding` | true | |
 | `ftsSearch` / `sparseVectors` | true when BM25 encoder is enabled | |
 | `vectorSearch` | true when `embedding.dimensions > 0` | |
-| `entities` / `knowledge` / `prompts` / `generationRefs` | **false** | not implemented this phase |
+| `entities` | **false** | team/user/agent/task 走 Postgres metadata (`/v3/meta/*`) |
+| `knowledge` / `prompts` / `generationRefs` | **true** | `entity_knowledge`, `memory_prompts`, `memory_generation_refs` in `mem_*` schema |
 
-No new TCVDB behavior. Skill still uses same-DB SQLite (`getRawDb()`) or TCVDB skill collections; skill-config fallbacks are unchanged.
+Skill metadata uses `PostgresSkillStore` in the same `mem_{instanceId}` schema when `STORE_MODE=postgres` (no SQLite `getRawDb()`). TCVDB service mode still uses `TcvdbSkillStore`.
 
 ## Postgres metadata (`PostgresMetadataStore`)
 

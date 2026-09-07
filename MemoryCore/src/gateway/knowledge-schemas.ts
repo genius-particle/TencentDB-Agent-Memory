@@ -22,7 +22,7 @@ export const knowledgeCreateRequestSchema = z.object({
   name: z.string().min(1),
   summary: z.string().max(256).nullable().optional(),
   team_id: z.string().min(1),
-  user_id: z.string().min(1).optional(),
+  user_id: z.string().min(1).nullish(),
   repo_url: z.string().min(1).optional(),
   branch: z.string().optional(),
 });

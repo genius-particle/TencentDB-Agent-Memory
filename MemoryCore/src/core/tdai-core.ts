@@ -65,6 +65,10 @@ import {
   resolveSkillConfig,
   SKILL_REVIEW_PROMPT,
 } from "./skill/index.js";
+import type { ISkillStore } from "./skill/skill-store.interface.js";
+import { PostgresSkillStore } from "./store/postgres-skill-store.js";
+import { createBM25Encoder } from "./store/bm25-local.js";
+import { resolvePostgresConnection, postgresSchemaForInstance } from "./store/postgres-env.js";
 // Skill async-extract 现在完全走 conversation-add 侧的 agent 队列 + Worker
 // (SkillTriggerService.archive → agent 队列 → SkillConversationExtractWorker),
 // 由 gateway/openclaw host wiring 的 wireConversationAdd 起。tdai-core 只负责
@@ -842,8 +846,14 @@ export class TdaiCore {
         this.cfg.cos?.bucket
       );
       const probe: SkillEnvProbe = {
-        outerStoreBackend: this.cfg.storeBackend === "tcvdb" ? "tcvdb" : "sqlite",
+        outerStoreBackend:
+          this.cfg.storeBackend === "tcvdb"
+            ? "tcvdb"
+            : this.cfg.storeBackend === "postgres"
+              ? "postgres"
+              : "sqlite",
         hasTcvdbCredentials: tcvdbHasCreds,
+        hasPostgresCredentials: !!resolvePostgresConnection(),
         hasCosCredentials: cosHasCreds,
         embeddingAvailable:
           this.cfg.embedding.enabled && (this.cfg.embedding.dimensions ?? 0) > 0,
@@ -857,33 +867,60 @@ export class TdaiCore {
         warn: (m: string) => this.logger.warn(m),
       };
       const resolved = resolveSkillConfig(this.cfg.skill, probe, resolverLogger);
+      if (!resolved) return;
       this.resolvedSkillConfig = resolved;
 
-      // Open the underlying DatabaseSync (raw handle escape hatch — see
-      // VectorStore.getRawDb() docstring). Skill tables (skill_meta /
-      // skill_fts / skill_vec / task_*) live in the SAME connection.
       const rawDbCarrier = this.vectorStore as unknown as {
         getRawDb?: () => unknown;
         getEmbeddingDimensions?: () => number;
       };
-      if (typeof rawDbCarrier.getRawDb !== "function") {
-        this.logger.warn(
-          `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() (only SQLite-backed VectorStore is supported in MVP)`,
-        );
-        return;
-      }
-      const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
       const dimensions =
         typeof rawDbCarrier.getEmbeddingDimensions === "function"
           ? rawDbCarrier.getEmbeddingDimensions()
           : (this.cfg.embedding.dimensions ?? 0);
 
-      const skillStore = new SqliteSkillStore({
-        db,
-        dimensions,
-        logger: this.logger,
-      });
-      skillStore.init();
+      let skillStore: ISkillStore;
+      if (resolved.storeBackend === "postgres") {
+        const connStr = resolvePostgresConnection();
+        if (!connStr) {
+          this.logger.warn(
+            `${TAG} Skill wiring skipped: storeBackend=postgres but DATABASE_URL / PG* missing`,
+          );
+          return;
+        }
+        const schema = postgresSchemaForInstance(this.instanceId);
+        const bm25Encoder = createBM25Encoder(this.cfg.bm25, this.logger);
+        const pgSkillStore = new PostgresSkillStore({
+          connectionString: connStr,
+          schema,
+          dimensions,
+          bm25Encoder,
+          logger: this.logger,
+        });
+        pgSkillStore.init();
+        await pgSkillStore.ensureReady();
+        if (pgSkillStore.isDegraded()) {
+          this.logger.warn(`${TAG} Skill wiring skipped: PostgresSkillStore init degraded`);
+          return;
+        }
+        skillStore = pgSkillStore;
+      } else {
+        if (typeof rawDbCarrier.getRawDb !== "function") {
+          this.logger.warn(
+            `${TAG} Skill wiring skipped: vectorStore does not expose getRawDb() ` +
+              `(sqlite skill store requires SQLite-backed memory store)`,
+          );
+          return;
+        }
+        const db = rawDbCarrier.getRawDb() as import("node:sqlite").DatabaseSync;
+        const sqliteSkillStore = new SqliteSkillStore({
+          db,
+          dimensions,
+          logger: this.logger,
+        });
+        sqliteSkillStore.init();
+        skillStore = sqliteSkillStore;
+      }
 
       const skillResources = new SkillResourceStore({
         storage: this.storage,

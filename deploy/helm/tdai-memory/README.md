@@ -29,6 +29,25 @@ helm install tdai-memory deploy/helm/tdai-memory \
   --set public.host=192.168.11.170
 ```
 
+`values-eodev.yaml`：170 并列安装（`-f values-eodev.yaml`，namespace `tdai-open`）：
+
+```bash
+helm upgrade --install tdai-open deploy/helm/tdai-memory \
+  -n tdai-open --create-namespace \
+  -f deploy/helm/tdai-memory/values-eodev.yaml \
+  --set llm.apiKey=... --set proxy.upstream.apiKey=... --set embedding.apiKey=...
+```
+
+Redis 镜像固定青岛仓；core/hub/proxy 默认 GHCR。拉取失败时可钉 tag 或改 registry：
+
+```bash
+--set image.tag=c020f22
+# 或改回青岛 mirror（示例）:
+# --set image.registry=registry.cn-qingdao.aliyuncs.com/eo \
+# --set image.core.repository=ghcr.io.genius-particle.tencentdb-agent-memory.memory-core \
+# ...
+```
+
 复现合并前 k3s-single 形态（SQLite、无 Postgres，仍用 GHCR 新镜像）：
 
 ```bash
@@ -41,7 +60,7 @@ helm install tdai-memory deploy/helm/tdai-memory \
   --set embedding.apiKey=...
 ```
 
-`values-eodev.yaml`：170 上与官方 `tdai-memory` 并列（namespace `tdai-open`，青岛仓镜像，ParadeDB，NodePort 31xxx，Panel `tdai-open.192.168.11.170.nip.io`）。
+`values-eodev.yaml`：170 上与官方 `tdai-memory` 并列（namespace `tdai-open`）。**Redis** 走青岛仓 `registry.cn-qingdao.aliyuncs.com/eo/redis:7-alpine`；**三件套** 先试 GHCR `ghcr.io/genius-particle/tencentdb-agent-memory/*:feat-server-team`（`pullPolicy: Always`）。Postgres 用 ParadeDB 青岛 mirror；Panel `tdai-open.192.168.11.170.nip.io`。GHCR 401 时再改青岛 mirror 或配置 `imagePullSecrets`。`STORE_MODE=postgres` 下 Skill 模块可用（`PostgresSkillStore`，同 schema），无需 SQLite overlay。
 
 不要用 `http://192.168.11.170/` 当管理端；Traefik 裸 IP 是 404。Panel 走 `http://tdai.192.168.11.170.nip.io/`。
 

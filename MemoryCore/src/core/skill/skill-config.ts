@@ -74,7 +74,13 @@ export function resolveSkillConfig(
   // --------------- store ---------------
   const requestedStore =
     input.storeBackend ?? probe.outerStoreBackend ?? "sqlite";
-  let storeBackend: "sqlite" | "tcvdb" = requestedStore;
+  let storeBackend: "sqlite" | "tcvdb" | "postgres";
+  if (requestedStore === "tcvdb" || requestedStore === "postgres" || requestedStore === "sqlite") {
+    storeBackend = requestedStore;
+  } else {
+    logger.warn(`${TAG} storeBackend=${String(requestedStore)} invalid — falling back to sqlite`);
+    storeBackend = "sqlite";
+  }
   if (storeBackend === "tcvdb" && !probe.hasTcvdbCredentials) {
     degradations.push({
       field: "storeBackend",
@@ -87,6 +93,12 @@ export function resolveSkillConfig(
       `${TAG} storeBackend=tcvdb requested but credentials missing — degrading to sqlite`,
     );
     storeBackend = "sqlite";
+  }
+  if (storeBackend === "postgres" && !probe.hasPostgresCredentials) {
+    logger.warn(
+      `${TAG} storeBackend=postgres requested but DATABASE_URL / PG* missing — ` +
+        `skill wiring will be skipped (no silent fallback to sqlite)`,
+    );
   }
 
   // --------------- content ---------------

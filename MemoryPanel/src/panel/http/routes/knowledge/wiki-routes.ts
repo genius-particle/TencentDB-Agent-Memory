@@ -78,6 +78,20 @@ export function registerKnowledgeWikiRoutes(api: Hono, deps: PanelDeps): void {
       serviceUrl: detail.service_url,
     });
     if (!reg.ok) return respondEnvelope(c, reg.env); // 用户重试，KS 幂等自愈
+    if (ctx.userKey) {
+      deps.knowledgeTaskRegistry.record({
+        knowledge_id: detail.wiki_id,
+        type: 'wiki',
+        team_id: teamId,
+        owner_user_id: gate.userId,
+        owner_user_key: ctx.userKey,
+        service_id: ctx.instanceId,
+        created_at: Date.now(),
+      });
+      deps.logger.info('[wiki/create] stashed owner key for S2S meta register', {
+        knowledge_id: detail.wiki_id, team_id: teamId, owner: gate.userId,
+      });
+    }
     return respondEnvelope(c, okEnvelope(c, detail));
   });
 
