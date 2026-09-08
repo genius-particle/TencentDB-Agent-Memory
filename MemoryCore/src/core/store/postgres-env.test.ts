@@ -38,6 +38,12 @@ describe("sparsevec literals (no database required)", () => {
     ]);
     expect(ftsIlikePatterns("uniqueftstokenalpha")).toEqual(["%uniqueftstokenalpha%"]);
   });
+
+  it("ftsLexicalTokens treats a Chinese phrase as one token (simple config limitation)", () => {
+    const phrase = "数据库迁移用什么工具";
+    expect(ftsLexicalTokens(phrase)).toEqual([phrase]);
+    expect(ftsIlikePatterns(phrase)).toEqual([`%${phrase}%`]);
+  });
 });
 
 describe("postgres env helpers", () => {

@@ -14,6 +14,8 @@ export interface ParsedPipelineTimerMember extends PipelineTimerMemberContext {
 
 const SCOPED_TIMER_PREFIX = "scope:";
 
+export { SCOPED_TIMER_PREFIX };
+
 function safeDecodeURIComponent(value: string): string {
   try {
     return decodeURIComponent(value);
@@ -81,4 +83,67 @@ export function parsePipelineTimerMember(member: string): ParsedPipelineTimerMem
   const classified = classifyTimerType(timerType);
   const tenant = parseProfileSessionTenant(sessionId);
   return { sessionId, timerType, ...classified, ...tenant };
+}
+
+export interface ParsedTimerShardMember extends ParsedPipelineTimerMember {
+  instanceId: string;
+}
+
+/**
+ * Parse a timer shard member from Redis ZSET.
+ * Format: `{instanceId}\x00{timerMember}` or legacy variants.
+ *
+ * Scoped pipeline timers (`scope:team:...|session:...:L2_schedule`) must NOT
+ * be split on the first colon — that would treat `scope` as instanceId.
+ */
+export function parseTimerShardMember(
+  member: string,
+  defaultInstanceId = "default",
+): ParsedTimerShardMember {
+  const sep = member.indexOf("\x00");
+  let instanceId: string;
+  let rest: string;
+
+  if (sep >= 0) {
+    instanceId = member.slice(0, sep);
+    rest = member.slice(sep + 1);
+  } else if (member.startsWith(SCOPED_TIMER_PREFIX)) {
+    instanceId = defaultInstanceId;
+    rest = member;
+  } else {
+    const firstColon = member.indexOf(":");
+    if (firstColon <= 0) {
+      instanceId = defaultInstanceId;
+      rest = member;
+    } else {
+      instanceId = member.slice(0, firstColon);
+      rest = member.slice(firstColon + 1);
+    }
+  }
+
+  if (rest.startsWith("offload-l15:")) {
+    const afterPrefix = rest.slice("offload-l15:".length);
+    const colonIdx = afterPrefix.indexOf(":");
+    const sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
+    return { instanceId, sessionId, taskType: "offload-l15", priority: 0, timerType: rest };
+  }
+  if (rest.startsWith("offload-l2:")) {
+    const afterPrefix = rest.slice("offload-l2:".length);
+    const colonIdx = afterPrefix.indexOf(":");
+    let sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
+    if (sessionId.endsWith(".mmd")) {
+      const lastColon = sessionId.lastIndexOf(":");
+      if (lastColon > 0) sessionId = sessionId.slice(0, lastColon);
+    }
+    return { instanceId, sessionId, taskType: "offload-l2", priority: 1, timerType: rest };
+  }
+  if (rest.startsWith("offload-l1:")) {
+    const afterPrefix = rest.slice("offload-l1:".length);
+    const colonIdx = afterPrefix.indexOf(":");
+    const sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
+    return { instanceId, sessionId, taskType: "offload-l1", priority: 0, timerType: rest };
+  }
+
+  const parsed = parsePipelineTimerMember(rest);
+  return { instanceId, ...parsed };
 }

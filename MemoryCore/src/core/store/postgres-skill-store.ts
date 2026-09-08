@@ -256,7 +256,7 @@ export class PostgresSkillStore implements ISkillStore {
     return {
       vectorSearch,
       ftsSearch: !this.degraded,
-      nativeHybridSearch: vectorSearch && hasBm25,
+      nativeHybridSearch: false,
       sparseVectors: hasBm25,
     };
   }

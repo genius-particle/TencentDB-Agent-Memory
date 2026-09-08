@@ -1,8 +1,5 @@
-# Default matches this fork's public standalone code:
-#   memory=postgres+pgvector, metadata=postgres, blobs=local (unset STORAGE_BACKEND),
-#   state=redis (LocalStateBackend when stateBackend=local / redis.deploy=false).
-# SQLite trial: -f values-sqlite.yaml
-# 170 host: -f values-eodev.yaml (namespace tdai-open, Qingdao images, ParadeDB)
+# Postgres open-stack sample (memory+metadata pgvector, Redis state, local blobs).
+# Optional local overlay: values-local.yaml (gitignored).
 
 nameOverride: ""
 fullnameOverride: ""

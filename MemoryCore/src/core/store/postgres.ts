@@ -67,8 +67,24 @@ import {
   toSparsevecLiteral,
   toVectorLiteral,
 } from "./sparsevec.js";
+import { rrfMerge } from "./search-utils.js";
+import { buildFtsQuery } from "./sqlite.js";
 
 const TAG = "[memory-tdai][postgres]";
+
+function ftsQueryFromUserText(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return buildFtsQuery(trimmed);
+}
+
+function rrfMergeByRecordId<T extends { record_id: string; score: number }>(
+  ...lists: T[][]
+): T[] {
+  return rrfMerge(lists, (item) => item.record_id).map(
+    ({ rrfScore, score: _prev, ...item }) => ({ ...item, score: rrfScore }) as T,
+  );
+}
 
 export interface PostgresMemoryStoreOptions {
   connectionString: string;
@@ -332,7 +348,9 @@ export class PostgresMemoryStore implements IMemoryStore {
       vectorSearch,
       // Lexical FTS is tsvector('simple') + token ILIKE, not BM25 sparsevec recall.
       ftsSearch: !this.degraded,
-      nativeHybridSearch: vectorSearch && hasBm25,
+      // Postgres hybrid is client-side FTS + vector RRF (see executeMemorySearch).
+      // nativeHybridSearch is reserved for TCVDB server-side dense+sparse+RRF.
+      nativeHybridSearch: false,
       sparseVectors: hasBm25,
       profiles: true,
       entities: false,
@@ -641,12 +659,31 @@ export class PostgresMemoryStore implements IMemoryStore {
     filter?: IsolationFilter;
   }): Promise<L1SearchResult[]> {
     const topK = params.topK ?? 10;
-    const queryText = params.query ?? "";
-    if (params.queryEmbedding && this.dimensions > 0 && !this.bm25Encoder) {
-      return this.searchL1Vector(params.queryEmbedding, topK, queryText, params.filter);
+    const queryText = (params.query ?? "").trim();
+    const hasEmbedding = !!params.queryEmbedding && this.dimensions > 0;
+
+    if (hasEmbedding && queryText) {
+      const candidateK = Math.max(topK * 3, topK);
+      const ftsQuery = ftsQueryFromUserText(queryText);
+      const [fts, vec] = await Promise.all([
+        ftsQuery ? this.searchL1Fts(ftsQuery, candidateK, params.filter) : Promise.resolve([]),
+        this.searchL1Vector(params.queryEmbedding!, candidateK, queryText, params.filter),
+      ]);
+      if (fts.length > 0 && vec.length > 0) {
+        return rrfMergeByRecordId(fts, vec).slice(0, topK);
+      }
+      if (vec.length > 0) return vec.slice(0, topK);
+      if (fts.length > 0) return fts.slice(0, topK);
+      return [];
     }
-    if (queryText) return this.searchL1Fts(queryText, topK, params.filter);
-    if (params.queryEmbedding) return this.searchL1Vector(params.queryEmbedding, topK, undefined, params.filter);
+    if (hasEmbedding) {
+      return this.searchL1Vector(params.queryEmbedding!, topK, undefined, params.filter);
+    }
+    if (queryText) {
+      const ftsQuery = ftsQueryFromUserText(queryText);
+      if (!ftsQuery) return [];
+      return this.searchL1Fts(ftsQuery, topK, params.filter);
+    }
     return [];
   }
 
@@ -932,9 +969,31 @@ export class PostgresMemoryStore implements IMemoryStore {
     filter?: IsolationFilter;
   }): Promise<L0SearchResult[]> {
     const topK = params.topK ?? 10;
-    const queryText = params.query ?? "";
-    if (queryText) return this.searchL0Fts(queryText, topK, params.filter);
-    if (params.queryEmbedding) return this.searchL0Vector(params.queryEmbedding, topK, undefined, params.filter);
+    const queryText = (params.query ?? "").trim();
+    const hasEmbedding = !!params.queryEmbedding && this.dimensions > 0;
+
+    if (hasEmbedding && queryText) {
+      const candidateK = Math.max(topK * 3, topK);
+      const ftsQuery = ftsQueryFromUserText(queryText);
+      const [fts, vec] = await Promise.all([
+        ftsQuery ? this.searchL0Fts(ftsQuery, candidateK, params.filter) : Promise.resolve([]),
+        this.searchL0Vector(params.queryEmbedding!, candidateK, undefined, params.filter),
+      ]);
+      if (fts.length > 0 && vec.length > 0) {
+        return rrfMergeByRecordId(fts, vec).slice(0, topK);
+      }
+      if (vec.length > 0) return vec.slice(0, topK);
+      if (fts.length > 0) return fts.slice(0, topK);
+      return [];
+    }
+    if (hasEmbedding) {
+      return this.searchL0Vector(params.queryEmbedding!, topK, undefined, params.filter);
+    }
+    if (queryText) {
+      const ftsQuery = ftsQueryFromUserText(queryText);
+      if (!ftsQuery) return [];
+      return this.searchL0Fts(ftsQuery, topK, params.filter);
+    }
     return [];
   }
 

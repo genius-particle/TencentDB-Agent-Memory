@@ -38,6 +38,7 @@ Honest capability flags:
 | `deferredEmbedding` | true | |
 | `ftsSearch` / `sparseVectors` | true when BM25 encoder is enabled | |
 | `vectorSearch` | true when `embedding.dimensions > 0` | |
+| `nativeHybridSearch` | **false** | TCVDB-only flag; Postgres uses client-side FTS + vector RRF in `executeMemorySearch` |
 | `entities` | **false** | team/user/agent/task 走 Postgres metadata (`/v3/meta/*`) |
 | `knowledge` / `prompts` / `generationRefs` | **true** | `entity_knowledge`, `memory_prompts`, `memory_generation_refs` in `mem_*` schema |
 

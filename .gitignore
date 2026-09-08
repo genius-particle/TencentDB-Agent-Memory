@@ -1,3 +1,6 @@
+# Local-only Helm overlay (machine-specific tags/hosts/keys); not part of the chart
+deploy/helm/tdai-memory/values-local.yaml
+
 # Dependencies
 node_modules/
 

@@ -18,7 +18,7 @@
  */
 
 import type { IStateBackend, TaskPayload, TimerEntry } from "../core/state/types.js";
-import { parsePipelineTimerMember } from "../core/state/timer-member.js";
+import { parseTimerShardMember } from "../core/state/timer-member.js";
 
 interface Logger {
   debug?: (message: string) => void;
@@ -153,7 +153,8 @@ export class TimerScanner {
         }
 
         for (const entry of expired) {
-          const { instanceId, sessionId, taskType, priority, timerType, teamId, agentId } = this.parseShardMember(entry.member);
+          const { instanceId, sessionId, taskType, priority, timerType, teamId, agentId } =
+            parseTimerShardMember(entry.member);
 
           const task: TaskPayload = {
             id: `${taskType}-${instanceId.slice(-8)}-${sessionId.slice(-8)}-${now}`,
@@ -188,61 +189,6 @@ export class TimerScanner {
       this.metrics.scanErrors++;
       this.logger.error(`${TAG} Scan error: ${err instanceof Error ? err.message : String(err)}`);
     }
-  }
-
-  /**
-   * Parse shard member format: "{instanceId}\x00{sessionId}:{timerType}"
-   * Example: "mem-j4wjesud\x00sess_001:L1_idle" → { instanceId: "mem-j4wjesud", sessionId: "sess_001", taskType: "L1" }
-   */
-  private parseShardMember(member: string): { instanceId: string; sessionId: string; taskType: TaskPayload["type"]; priority: number; timerType: string; teamId?: string; agentId?: string } {
-    const sep = member.indexOf("\x00");
-    let instanceId: string;
-    let rest: string;
-
-    if (sep >= 0) {
-      instanceId = member.slice(0, sep);
-      rest = member.slice(sep + 1);
-    } else {
-      // Fallback: try colon-separated (legacy format "instanceId:sessionId:type")
-      const firstColon = member.indexOf(":");
-      instanceId = member.slice(0, firstColon);
-      rest = member.slice(firstColon + 1);
-    }
-
-    // rest = timer member after instanceId separator
-    // New unified format: "offload-{type}:{embeddedInstanceId}:{sessionId}[:{extra}]" (prefix-based)
-    // Legacy format: "sessionId:L1_idle" or "sessionId:L2_schedule"
-
-    // Check for offload prefix format first
-    if (rest.startsWith("offload-l15:")) {
-      // Skip embedded instanceId: "offload-l15:{instanceId}:{sessionId}"
-      const afterPrefix = rest.slice("offload-l15:".length);
-      const colonIdx = afterPrefix.indexOf(":");
-      const sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
-      return { instanceId, sessionId, taskType: "offload-l15", priority: 0, timerType: rest };
-    }
-    if (rest.startsWith("offload-l2:")) {
-      // Skip embedded instanceId: "offload-l2:{instanceId}:{sessionId}[:{mmdFile}]"
-      const afterPrefix = rest.slice("offload-l2:".length);
-      const colonIdx = afterPrefix.indexOf(":");
-      let sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
-      // Strip trailing ":{mmdFile}" from sessionId
-      if (sessionId.endsWith(".mmd")) {
-        const lastColon = sessionId.lastIndexOf(":");
-        if (lastColon > 0) sessionId = sessionId.slice(0, lastColon);
-      }
-      return { instanceId, sessionId, taskType: "offload-l2", priority: 1, timerType: rest };
-    }
-    if (rest.startsWith("offload-l1:")) {
-      // Skip embedded instanceId: "offload-l1:{instanceId}:{sessionId}"
-      const afterPrefix = rest.slice("offload-l1:".length);
-      const colonIdx = afterPrefix.indexOf(":");
-      const sessionId = colonIdx > 0 ? afterPrefix.slice(colonIdx + 1) : afterPrefix;
-      return { instanceId, sessionId, taskType: "offload-l1", priority: 0, timerType: rest };
-    }
-
-    const parsed = parsePipelineTimerMember(rest);
-    return { instanceId, ...parsed };
   }
 }
 
