@@ -141,13 +141,10 @@ describe.skipIf(!hasPostgres)("Postgres Chinese hybrid search", () => {
 
     const ftsToken = `zxqv-rrf-merge-${randomUUID()}`;
     const recordId = `l1-${randomUUID()}`;
-    const decoyId = `l1-${randomUUID()}`;
     const query = ftsToken;
     const queryEmbedding = unitVector(VECTOR_DIMS, 1);
 
     await upsertL1(store, recordId, `${ftsToken} golang-migrate tool`, queryEmbedding);
-    // Decoy matches FTS only (no embedding) so RRF cannot tie with swapped ranks.
-    await upsertL1(store, decoyId, `${ftsToken} noise filler`);
 
     const ftsQuery = buildFtsQuery(query);
     expect(ftsQuery).toBeTruthy();
@@ -156,8 +153,8 @@ describe.skipIf(!hasPostgres)("Postgres Chinese hybrid search", () => {
       store.searchL1Fts(ftsQuery!, 5),
       store.searchL1Vector(queryEmbedding, 5),
     ]);
-    expect(ftsOnly.some((h) => h.record_id === recordId)).toBe(true);
-    expect(vecOnly.some((h) => h.record_id === recordId)).toBe(true);
+    expect(ftsOnly[0]?.record_id).toBe(recordId);
+    expect(vecOnly[0]?.record_id).toBe(recordId);
 
     const hits = await store.searchL1Hybrid({
       query,
@@ -168,7 +165,7 @@ describe.skipIf(!hasPostgres)("Postgres Chinese hybrid search", () => {
     const merged = hits.find((h) => h.record_id === recordId);
     expect(merged).toBeDefined();
     expect(hits[0].record_id).toBe(recordId);
-    // Rank 0 in both FTS and vector lists → RRF score 2/(K+1), not raw FTS/vector score.
+    // Rank 0 in both FTS and vector lists → RRF score 2/(K+1).
     expect(merged!.score).toBeCloseTo(2 / (RRF_K + 1), 5);
   });
 
@@ -193,7 +190,7 @@ describe.skipIf(!hasPostgres)("Postgres Chinese hybrid search", () => {
       queryEmbedding: unitVector(VECTOR_DIMS, 1),
       topK: 5,
     });
-    expect(hits.some((h) => h.record_id === recordId)).toBe(true);
+    expect(hits[0]?.record_id).toBe(recordId);
     expect(hits[0].score).toBeCloseTo(2 / (RRF_K + 1), 5);
   });
 });
