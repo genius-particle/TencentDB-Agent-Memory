@@ -197,26 +197,65 @@ export function runMemoryStoreContract(
   it(`[${name}] pagination queryL0/L1 when advertised`, async (ctx) => {
     const store = getStore();
     if (!skipUnlessCap(ctx, store, "pagination")) return;
-    const rec = sampleL0();
-    await store.upsertL0(rec);
-    const l0 = await store.queryL0Paginated!({
-      teamId: rec.teamId,
-      sessionId: rec.sessionId,
-      limit: 10,
-      offset: 0,
-    });
-    expect(l0.total).toBeGreaterThanOrEqual(1);
-    expect(l0.rows.some((r) => r.record_id === rec.id)).toBe(true);
 
-    const l1 = sampleL1();
-    await store.upsertL1(l1);
-    const page = await store.queryL1Paginated!({
-      teamId: l1.teamId,
-      sessionId: l1.sessionId,
-      limit: 10,
+    const sessionId = `sess-${randomUUID()}`;
+    const teamId = "team-1";
+    const agentId = "agent-1";
+    const baseMs = Date.now();
+    const l0Records = [0, 1, 2].map((i) =>
+      sampleL0({
+        id: `l0-${randomUUID()}`,
+        sessionId,
+        teamId,
+        agentId,
+        timestamp: baseMs + i * 1000,
+        recordedAt: new Date(baseMs + i * 1000).toISOString(),
+        messageText: `l0-msg-${i}`,
+      }),
+    );
+    for (const rec of l0Records) {
+      await store.upsertL0(rec);
+    }
+    const l0 = await store.queryL0Paginated!({
+      teamId,
+      sessionId,
+      limit: 2,
       offset: 0,
     });
-    expect(page.total).toBeGreaterThanOrEqual(1);
+    expect(l0.total).toBeGreaterThanOrEqual(3);
+    expect(l0.rows.length).toBe(2);
+    expect(l0.rows[0].record_id).toBe(l0Records[2].id);
+    expect(l0.rows[1].record_id).toBe(l0Records[1].id);
+    expect(l0.rows[0].timestamp).toBeGreaterThan(l0.rows[1].timestamp);
+
+    const l1Records = [0, 1, 2].map((i) => {
+      const updatedAt = new Date(baseMs + i * 1000).toISOString();
+      return sampleL1({
+        id: `l1-${randomUUID()}`,
+        sessionId,
+        teamId,
+        agentId,
+        updatedAt,
+        createdAt: updatedAt,
+        content: `l1-msg-${i}`,
+      });
+    });
+    for (const rec of l1Records) {
+      await store.upsertL1(rec);
+    }
+    const page = await store.queryL1Paginated!({
+      teamId,
+      sessionId,
+      limit: 2,
+      offset: 0,
+    });
+    expect(page.total).toBeGreaterThanOrEqual(3);
+    expect(page.rows.length).toBe(2);
+    expect(page.rows[0].record_id).toBe(l1Records[2].id);
+    expect(page.rows[1].record_id).toBe(l1Records[1].id);
+    expect(Date.parse(page.rows[0].updated_time)).toBeGreaterThan(
+      Date.parse(page.rows[1].updated_time),
+    );
   });
 
   it(`[${name}] clearMemoryContent requires team+agent and wipes L0/L1`, async (ctx) => {

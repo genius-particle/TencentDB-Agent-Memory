@@ -1055,7 +1055,7 @@ export class PostgresMemoryStore implements IMemoryStore {
           `SELECT record_id, session_key, session_id, team_id, task_id, user_id, agent_id,
                   role, message_text, recorded_at, timestamp
            FROM l0_conversations ${where}
-           ORDER BY timestamp ASC, record_id ASC
+           ORDER BY timestamp DESC, record_id DESC
            LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
           [...params, limit, offset],
         );
@@ -1087,7 +1087,7 @@ export class PostgresMemoryStore implements IMemoryStore {
                   team_id, task_id, user_id, agent_id, version, timestamp_str, timestamp_start,
                   timestamp_end, created_time, updated_time, metadata_json
            FROM l1_records ${where}
-           ORDER BY updated_time ASC, record_id ASC
+           ORDER BY updated_time DESC, record_id DESC
            LIMIT $${params.length + 1} OFFSET $${params.length + 2}`,
           [...params, limit, offset],
         );

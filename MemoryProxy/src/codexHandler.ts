@@ -49,7 +49,7 @@ import {
 } from "./langfuse.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { recordTdaiTurn } from "./tdai/recorder.js";
+import { recordTdaiTurn, recordTdaiTurnIfFinal } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -1017,14 +1017,18 @@ async function triggerCodexArchiveHooks(
   toolUseCount: number,
 ): Promise<void> {
   // ── TDAI L0 write ──
-  // 与 anthropicHandler stream 分支 (line 1867-1878) 对称:
-  //   - trackWrite 挂全局 in-flight set (index.ts flushPendingWrites 兜底 SIGTERM 丢包)
-  //   - withL0Retry 3 次退避挡 tdai kernel 瞬断
-  //   - stream 场景不 await, 让归档 hook 提前返回
+  // 与 anthropicHandler stream 分支对称 + 与 skill 归档同 round-level gate:
+  // 工具循环中间态 (toolUseCount > 0) 跳过，仅 final answer 写一次 L0。
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurnIfFinal(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          { toolCallCountOverride: toolUseCount },
+        ),
       ).catch((err: unknown) => {
         console.warn("[codex-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),

@@ -345,7 +345,7 @@ export interface L0PaginatedFilter extends L0CountFilter {
   offset: number;
 }
 
-/** Result of v2 L0 paginated query. */
+/** Result of v2 L0 paginated query. Rows are newest-first (time descending). */
 export interface L0PaginatedResult {
   rows: L0QueryRow[];
   /** Total count matching filters (for pagination). */
@@ -376,7 +376,7 @@ export interface L1PaginatedFilter extends L1CountFilter {
   offset: number;
 }
 
-/** Result of v2 L1 paginated query. */
+/** Result of v2 L1 paginated query. Rows are newest-first (updated_time descending). */
 export interface L1PaginatedResult {
   rows: L1RecordRow[];
   /** Total count matching filters (for pagination). */
@@ -673,6 +673,7 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * L0 paginated query for v2 API `/conversation/query`.
    * Returns rows matching the filter, paginated by limit/offset,
    * plus the total count of matching rows.
+   * Rows are ordered by time descending (newest first).
    */
   queryL0Paginated?(filter: L0PaginatedFilter): MaybePromise<L0PaginatedResult>;
 
@@ -680,6 +681,7 @@ export interface IMemoryStore extends MemoryPromptStore, MemoryGenerationRefStor
    * L1 paginated query for v2 API `/atomic/query`.
    * Returns rows matching the filter, paginated by limit/offset,
    * plus the total count of matching rows.
+   * Rows are ordered by updated_time descending (newest first).
    */
   queryL1Paginated?(filter: L1PaginatedFilter): MaybePromise<L1PaginatedResult>;
 

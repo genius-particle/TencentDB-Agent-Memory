@@ -42,7 +42,7 @@ import { matchSystemUserByUserId, hasSystemUsers } from "./systemUser.js";
 import { handleSystemUserPassthrough } from "./systemUserPassthrough.js";
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { extractLatestUserMessage, recordTdaiTurn } from "./tdai/recorder.js";
+import { extractLatestUserMessage, recordTdaiTurn, recordTdaiTurnIfFinal } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -1720,7 +1720,13 @@ export async function handleChatCompletions(
     }
 
     if (tdaiClient && isExtractionAllowed(config, "tdai-memory")) {
-      await recordTdaiTurn(tdaiClient, tdaiIdentity, tdaiUserMessage, assistantContentForTdai(assistantMessage));
+      await recordTdaiTurnIfFinal(
+        tdaiClient,
+        tdaiIdentity,
+        tdaiUserMessage,
+        assistantContentForTdai(assistantMessage),
+        { assistantMessage: assistantMessage ?? null },
+      );
     } else if (tdaiClient) {
       logExtractionSkipped(config, "tdai-memory", sessionKey);
     }
@@ -2195,9 +2201,10 @@ function createUsageTapTransform(ctx: TapContext): TransformStream<Uint8Array, U
       //     flushPendingWrites 等待或超时兜底，避免 pod rolling 时丢 L0。
       //   - withL0Retry 应对 tdai kernel 瞬断 / 5xx（3 次退避 ~3.5s 总时长）。
       trackWrite(
-        withL0Retry(() => recordTdaiTurn(
+        withL0Retry(() => recordTdaiTurnIfFinal(
           ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage,
           outputMessageContent(outputMessage),
+          { toolCallCountOverride: toolCallAccumulators.size },
         )).catch((err: unknown) => pipe.error("TDAI_L0", err))
       );
     } else if (ctx.tdaiClient) {

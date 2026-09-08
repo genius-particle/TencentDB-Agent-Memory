@@ -48,7 +48,7 @@ import {
 // ── TDAI L0 + Skill extraction imports ────────────────────────────────────────
 import { TdaiClient } from "./tdai/client.js";
 import { deriveTdaiIdentity } from "./tdai/identity.js";
-import { recordTdaiTurn } from "./tdai/recorder.js";
+import { recordTdaiTurn, recordTdaiTurnIfFinal } from "./tdai/recorder.js";
 import { trackWrite, withL0Retry } from "./tdai/pending-writes.js";
 import type { TdaiIdentity, TdaiMessage } from "./tdai/types.js";
 import { triggerSkillExtractIfReady } from "./skill/handler-glue.js";
@@ -381,7 +381,13 @@ async function triggerWorkbuddyArchiveHooks(
   if (ctx.tdaiClient && ctx.tdaiIdentity && isExtractionAllowed(ctx.config, "tdai-memory")) {
     trackWrite(
       withL0Retry(() =>
-        recordTdaiTurn(ctx.tdaiClient!, ctx.tdaiIdentity, ctx.tdaiUserMessage, assistantText || null),
+        recordTdaiTurnIfFinal(
+          ctx.tdaiClient!,
+          ctx.tdaiIdentity,
+          ctx.tdaiUserMessage,
+          assistantText || null,
+          toolCallCountOverride !== undefined ? { toolCallCountOverride } : undefined,
+        ),
       ).catch((err: unknown) => {
         console.warn("[workbuddy-tdai-l0] failed:", err instanceof Error ? err.message : String(err));
       }),

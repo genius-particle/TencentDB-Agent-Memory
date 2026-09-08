@@ -1,6 +1,7 @@
 import type { TdaiClient } from "./client.js";
 import type { TdaiIdentity, TdaiMessage } from "./types.js";
 import { extractUserQueryText } from "../common/user-query-extractor.js";
+import { isFinalAnswer } from "../skill/normalize-conversation.js";
 
 /**
  * 从最后一条 user 消息中抽取「真正的用户提问」，写入 L0。
@@ -36,6 +37,39 @@ export async function recordTdaiTurn(client: TdaiClient, identity: TdaiIdentity 
     messages.push({ role: "assistant", content: assistantContent });
   }
   await client.addConversation(identity, messages);
+}
+
+export interface RecordTdaiTurnIfFinalOptions {
+  /** Stream paths: tool_use / function_call count from SSE accumulator. */
+  toolCallCountOverride?: number;
+  /** Non-stream paths: full assistant message (tool_calls / tool_use blocks). */
+  assistantMessage?: Record<string, unknown> | null;
+}
+
+/**
+ * Round-level L0 write — only when the agent gave a final answer (no pending
+ * tool calls). Aligns with skill/handler-glue.ts `isFinalAnswer` gate so a
+ * single human turn produces one L0 record across tool-loop HTTP requests.
+ *
+ * Mem-command and other one-shot paths should call {@link recordTdaiTurn} directly.
+ */
+export async function recordTdaiTurnIfFinal(
+  client: TdaiClient,
+  identity: TdaiIdentity | null,
+  userMessage: TdaiMessage | null,
+  assistantContent: string | null | undefined,
+  opts?: RecordTdaiTurnIfFinalOptions,
+): Promise<void> {
+  const asstForCheck =
+    opts?.assistantMessage ??
+    (assistantContent?.trim()
+      ? { role: "assistant", content: assistantContent }
+      : opts?.toolCallCountOverride !== undefined
+        ? { role: "assistant", content: assistantContent ?? "" }
+        : null);
+
+  if (!isFinalAnswer(asstForCheck, opts?.toolCallCountOverride)) return;
+  await recordTdaiTurn(client, identity, userMessage, assistantContent);
 }
 
 function extractContentText(content: unknown): string {
